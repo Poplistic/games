@@ -2,14 +2,20 @@ import express from "express";
 import fs from "fs";
 import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
 
+/* ======================
+   BASIC SERVER SETUP
+====================== */
+
 const app = express();
 app.use(express.json());
 
 const SECRET = process.env.SECRET;
+const PORT = process.env.PORT || 3000;
+
 const QUEUE_FILE = "./queue.json";
 
 /* ======================
-   DISCORD CLIENT SETUP
+   DISCORD CLIENT
 ====================== */
 
 const client = new Client({
@@ -23,7 +29,7 @@ client.once("ready", () => {
 await client.login(process.env.DISCORD_TOKEN);
 
 /* ======================
-   QUEUE PERSISTENCE
+   PERSISTENT COMMAND QUEUE
 ====================== */
 
 function loadQueue() {
@@ -36,9 +42,17 @@ function saveQueue(queue) {
 }
 
 /* ======================
-   COMMAND ROUTES
+   LIVE GAME STATE STORAGE
 ====================== */
 
+let latestState = [];
+let liveMessageId = null;
+
+/* ======================
+   ROUTES
+====================== */
+
+/* ---- Discord → Roblox Commands ---- */
 app.post("/command", (req, res) => {
 	if (req.body.secret !== SECRET) return res.sendStatus(403);
 
@@ -53,6 +67,7 @@ app.post("/command", (req, res) => {
 	res.sendStatus(200);
 });
 
+/* ---- Roblox → Poll Commands ---- */
 app.get("/poll", (req, res) => {
 	if (req.query.secret !== SECRET) return res.sendStatus(403);
 
@@ -61,10 +76,15 @@ app.get("/poll", (req, res) => {
 	res.json(queue);
 });
 
-/* ======================
-   RECAP ROUTE
-====================== */
+/* ---- Roblox → Live State ---- */
+app.post("/state", (req, res) => {
+	if (req.body.secret !== SECRET) return res.sendStatus(403);
 
+	latestState = req.body.state || [];
+	res.sendStatus(200);
+});
+
+/* ---- Roblox → Game Recap ---- */
 app.post("/recap", async (req, res) => {
 	if (req.body.secret !== SECRET) return res.sendStatus(403);
 
@@ -91,9 +111,46 @@ app.post("/recap", async (req, res) => {
 });
 
 /* ======================
+   LIVE DISCORD EMBED LOOP
+====================== */
+
+client.once("ready", async () => {
+	console.log("📡 Live Hunger Games embed running");
+
+	const channel = await client.channels.fetch(process.env.CHANNEL_ID);
+
+	setInterval(async () => {
+		if (!latestState.length) return;
+
+		const alive = latestState.filter(t => t.alive);
+
+		const embed = new EmbedBuilder()
+			.setTitle("🏹 Hunger Games Live")
+			.setDescription(`🟢 Alive: ${alive.length}`)
+			.setColor(0x2ECC71)
+			.addFields(
+				alive.map(t => ({
+					name: t.name,
+					value: `🗡️ ${t.kills} | 🗳️ ${t.votes}`,
+					inline: true
+				}))
+			)
+			.setTimestamp();
+
+		if (!liveMessageId) {
+			const msg = await channel.send({ embeds: [embed] });
+			liveMessageId = msg.id;
+		} else {
+			const msg = await channel.messages.fetch(liveMessageId);
+			await msg.edit({ embeds: [embed] });
+		}
+	}, 10000);
+});
+
+/* ======================
    START SERVER
 ====================== */
 
-app.listen(process.env.PORT || 3000, () => {
-	console.log("🚀 HG Relay server running");
+app.listen(PORT, () => {
+	console.log(`🚀 HG Relay running on port ${PORT}`);
 });
