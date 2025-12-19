@@ -4,13 +4,13 @@ import {
 	Client,
 	GatewayIntentBits,
 	EmbedBuilder,
-	REST,
-	Routes,
-	SlashCommandBuilder
+	ActionRowBuilder,
+	ButtonBuilder,
+	ButtonStyle
 } from "discord.js";
 
 /* ======================
-   BASIC SERVER SETUP
+   BASIC SETUP
 ====================== */
 
 const app = express();
@@ -30,40 +30,9 @@ const client = new Client({
 
 await client.login(process.env.DISCORD_TOKEN);
 
-client.once("ready", async () => {
+client.once("ready", () => {
 	console.log(`🤖 Logged in as ${client.user.tag}`);
-	await registerCommands();
 });
-
-/* ======================
-   SLASH COMMAND REGISTRATION
-====================== */
-
-async function registerCommands() {
-	const commands = [
-		new SlashCommandBuilder().setName("day").setDescription("Start daytime"),
-		new SlashCommandBuilder().setName("night").setDescription("Start nighttime"),
-		new SlashCommandBuilder().setName("finale").setDescription("Start finale"),
-		new SlashCommandBuilder()
-			.setName("year")
-			.setDescription("Set Hunger Games year")
-			.addIntegerOption(opt =>
-				opt.setName("number").setDescription("Year 1–100").setRequired(true)
-			),
-		new SlashCommandBuilder()
-			.setName("sponsor")
-			.setDescription("Trigger sponsor event")
-	].map(c => c.toJSON());
-
-	const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
-
-	await rest.put(
-		Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
-		{ body: commands }
-	);
-
-	console.log("✅ Slash commands registered");
-}
 
 /* ======================
    COMMAND QUEUE
@@ -78,65 +47,14 @@ function saveQueue(queue) {
 	fs.writeFileSync(QUEUE_FILE, JSON.stringify(queue, null, 2));
 }
 
-function enqueue(command, args = []) {
-	const queue = loadQueue();
-	queue.push({ command, args, time: Date.now() });
-	saveQueue(queue);
-}
-
 /* ======================
-   DISCORD COMMAND HANDLER
+   LIVE STATE + VOTES
 ====================== */
 
-client.on("interactionCreate", async interaction => {
-	if (!interaction.isChatInputCommand()) return;
-
-	// Optional permission check
-	if (process.env.ADMIN_ROLE_ID) {
-		const member = interaction.member;
-		if (!member.roles.cache.has(process.env.ADMIN_ROLE_ID)) {
-			return interaction.reply({
-				content: "❌ You are not allowed to run this command.",
-				ephemeral: true
-			});
-		}
-	}
-
-	switch (interaction.commandName) {
-		case "day":
-			enqueue("DAY");
-			await interaction.reply("☀️ Day has begun.");
-			break;
-
-		case "night":
-			enqueue("NIGHT");
-			await interaction.reply("🌙 Night has fallen.");
-			break;
-
-		case "finale":
-			enqueue("FINALE");
-			await interaction.reply("🔥 Finale initiated.");
-			break;
-
-		case "year": {
-			const year = interaction.options.getInteger("number");
-			if (year < 1 || year > 100) {
-				return interaction.reply({
-					content: "❌ Year must be between 1 and 100.",
-					ephemeral: true
-				});
-			}
-			enqueue("YEAR", [year]);
-			await interaction.reply(`📜 Hunger Games Year set to ${year}.`);
-			break;
-		}
-
-		case "sponsor":
-			enqueue("SPONSOR");
-			await interaction.reply("🎁 Sponsor event triggered.");
-			break;
-	}
-});
+let latestState = [];
+let sponsorVotes = {}; // name -> votes
+let oddsMessageId = null;
+let voteMessageId = null;
 
 /* ======================
    ROBLOX ROUTES
@@ -144,10 +62,118 @@ client.on("interactionCreate", async interaction => {
 
 app.get("/poll", (req, res) => {
 	if (req.query.secret !== SECRET) return res.sendStatus(403);
-
 	const queue = loadQueue();
 	saveQueue([]);
 	res.json(queue);
+});
+
+app.post("/state", (req, res) => {
+	if (req.body.secret !== SECRET) return res.sendStatus(403);
+
+	latestState = req.body.state || [];
+
+	// sync sponsor votes
+	for (const t of latestState) {
+		if (!sponsorVotes[t.name]) sponsorVotes[t.name] = t.votes || 0;
+	}
+
+	res.sendStatus(200);
+});
+
+/* ======================
+   DISCORD BUTTON VOTING
+====================== */
+
+client.on("interactionCreate", async interaction => {
+	if (!interaction.isButton()) return;
+
+	const name = interaction.customId.replace("vote_", "");
+	sponsorVotes[name] = (sponsorVotes[name] || 0) + 1;
+
+	await interaction.reply({
+		content: `🎁 You sponsored **${name}**!`,
+		ephemeral: true
+	});
+});
+
+/* ======================
+   LIVE ODDS + VOTING EMBEDS
+====================== */
+
+client.once("ready", async () => {
+	const channel = await client.channels.fetch(process.env.CHANNEL_ID);
+
+	setInterval(async () => {
+		if (!latestState.length) return;
+
+		/* ---- CALCULATE ODDS ---- */
+		const scored = latestState.map(t => {
+			const votes = sponsorVotes[t.name] || 0;
+			const score = (t.kills * 2) + votes;
+			return { ...t, votes, score };
+		});
+
+		const maxScore = Math.max(...scored.map(t => t.score), 1);
+
+		scored.forEach(t => {
+			t.odds = Math.round((t.score / maxScore) * 100);
+		});
+
+		/* ---- ODDS EMBED ---- */
+		const oddsEmbed = new EmbedBuilder()
+			.setTitle("🎲 Live Victory Odds")
+			.setColor(0x9B59B6)
+			.setDescription(
+				scored
+					.sort((a, b) => b.odds - a.odds)
+					.map(t =>
+						`**${t.name}** — ${t.odds}% 🗡️ ${t.kills} 🎁 ${t.votes}`
+					)
+					.join("\n")
+			)
+			.setTimestamp();
+
+		if (!oddsMessageId) {
+			const msg = await channel.send({ embeds: [oddsEmbed] });
+			oddsMessageId = msg.id;
+		} else {
+			const msg = await channel.messages.fetch(oddsMessageId);
+			await msg.edit({ embeds: [oddsEmbed] });
+		}
+
+		/* ---- VOTING EMBED ---- */
+		const buttons = scored
+			.filter(t => t.alive)
+			.slice(0, 5)
+			.map(t =>
+				new ButtonBuilder()
+					.setCustomId(`vote_${t.name}`)
+					.setLabel(t.name)
+					.setStyle(ButtonStyle.Primary)
+			);
+
+		const row = new ActionRowBuilder().addComponents(buttons);
+
+		const voteEmbed = new EmbedBuilder()
+			.setTitle("🎁 Sponsor a Tribute")
+			.setDescription("Click a button to send sponsor support!")
+			.setColor(0xF1C40F);
+
+		if (!voteMessageId) {
+			const msg = await channel.send({
+				embeds: [voteEmbed],
+				components: [row]
+			});
+			voteMessageId = msg.id;
+		} else {
+			const msg = await channel.messages.fetch(voteMessageId);
+			await msg.edit({
+				embeds: [voteEmbed],
+				components: [row]
+			});
+		}
+
+	}, 10000);
 });
 
 /* ======================
