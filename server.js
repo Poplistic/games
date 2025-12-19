@@ -1,38 +1,41 @@
 import express from "express";
+import fs from "fs";
 
 const app = express();
 app.use(express.json());
 
 const SECRET = process.env.SECRET;
-let queue = [];
+const QUEUE_FILE = "./queue.json";
 
-// Discord → Server
+function loadQueue() {
+  if (!fs.existsSync(QUEUE_FILE)) return [];
+  return JSON.parse(fs.readFileSync(QUEUE_FILE));
+}
+
+function saveQueue(queue) {
+  fs.writeFileSync(QUEUE_FILE, JSON.stringify(queue));
+}
+
 app.post("/command", (req, res) => {
-	if (req.body.secret !== SECRET) {
-		return res.sendStatus(403);
-	}
+  if (req.body.secret !== SECRET) return res.sendStatus(403);
 
-	queue.push({
-		command: req.body.command,
-		args: req.body.args || [],
-		time: Date.now()
-	});
+  const queue = loadQueue();
+  queue.push({
+    command: req.body.command,
+    args: req.body.args || [],
+    time: Date.now()
+  });
+  saveQueue(queue);
 
-	res.sendStatus(200);
+  res.sendStatus(200);
 });
 
-// Roblox → Server
 app.get("/poll", (req, res) => {
-	if (req.query.secret !== SECRET) {
-		return res.sendStatus(403);
-	}
+  if (req.query.secret !== SECRET) return res.sendStatus(403);
 
-	const data = [...queue];
-	queue = [];
-	res.json(data);
+  const queue = loadQueue();
+  saveQueue([]); // clear after read
+  res.json(queue);
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-	console.log("HG Relay running on port", PORT);
-});
+app.listen(process.env.PORT || 3000);
