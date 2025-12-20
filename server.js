@@ -3,10 +3,6 @@ import fs from "fs";
 import {
 	Client,
 	GatewayIntentBits,
-	EmbedBuilder,
-	ActionRowBuilder,
-	ButtonBuilder,
-	ButtonStyle,
 	Events,
 	REST,
 	Routes
@@ -24,7 +20,6 @@ const {
 	DISCORD_TOKEN,
 	CLIENT_ID,
 	GUILD_ID,
-	CHANNEL_ID,
 	PORT = 10000
 } = process.env;
 
@@ -62,6 +57,7 @@ const client = new Client({
 ====================== */
 
 const commands = [
+	{ name: "countdown", description: "Start the Hunger Games countdown" },
 	{ name: "day", description: "Start daytime" },
 	{ name: "night", description: "Start nighttime" },
 	{ name: "finale", description: "Start finale" },
@@ -113,15 +109,6 @@ async function registerCommands() {
 }
 
 /* ======================
-   LIVE STATE + VOTES
-====================== */
-
-let latestState = [];
-let sponsorVotes = {};
-let oddsMessageId = null;
-let voteMessageId = null;
-
-/* ======================
    ROBLOX ROUTES
 ====================== */
 
@@ -133,64 +120,55 @@ app.get("/poll", (req, res) => {
 	res.json(queue);
 });
 
-app.post("/state", (req, res) => {
-	if (req.body.secret !== SECRET) return res.sendStatus(403);
-
-	latestState = req.body.state || [];
-
-	for (const t of latestState) {
-		if (!sponsorVotes[t.name]) {
-			sponsorVotes[t.name] = t.votes || 0;
-		}
-	}
-
-	res.sendStatus(200);
-});
-
 /* ======================
    INTERACTIONS
 ====================== */
 
 client.on(Events.InteractionCreate, async interaction => {
-	if (interaction.isChatInputCommand()) {
-		switch (interaction.commandName) {
-			case "day":
-				enqueue("DAY");
-				await interaction.reply("🌞 Day started.");
-				break;
+	if (!interaction.isChatInputCommand()) return;
 
-			case "night":
-				enqueue("NIGHT");
-				await interaction.reply("🌙 Night started.");
-				break;
+	switch (interaction.commandName) {
+		case "countdown":
+			enqueue("COUNTDOWN");
+			await interaction.reply("⏳ Countdown started.");
+			break;
 
-			case "finale":
-				enqueue("FINALE");
-				await interaction.reply("🔥 Finale started.");
-				break;
+		case "day":
+			enqueue("DAY");
+			await interaction.reply("🌞 Day started.");
+			break;
 
-			case "year": {
-				const year = interaction.options.getInteger("number");
-				enqueue("YEAR", [year]);
-				await interaction.reply(`📅 Year set to ${year}`);
-				break;
-			}
+		case "night":
+			enqueue("NIGHT");
+			await interaction.reply("🌙 Night started.");
+			break;
 
-			case "sponsor":
-				enqueue("SPONSOR");
-				await interaction.reply("🎁 Sponsor triggered.");
-				break;
+		case "finale":
+			enqueue("FINALE");
+			await interaction.reply("🔥 Finale started.");
+			break;
 
-			case "storm": {
-				const state = interaction.options.getString("state");
-				enqueue("STORM", [state]);
-				await interaction.reply(
-					state === "START"
-						? "🌩️ Storm started."
-						: "☀️ Storm stopped."
-				);
-				break;
-			}
+		case "year": {
+			const year = interaction.options.getInteger("number");
+			enqueue("YEAR", [year]);
+			await interaction.reply(`📅 Year set to ${year}`);
+			break;
+		}
+
+		case "sponsor":
+			enqueue("SPONSOR");
+			await interaction.reply("🎁 Sponsor triggered.");
+			break;
+
+		case "storm": {
+			const state = interaction.options.getString("state");
+			enqueue("STORM", [state]);
+			await interaction.reply(
+				state === "START"
+					? "🌩️ Storm started."
+					: "☀️ Storm stopped."
+			);
+			break;
 		}
 	}
 });
