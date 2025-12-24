@@ -8,10 +8,6 @@ import {
 	Routes
 } from "discord.js";
 
-/* ======================
-   BASIC SETUP
-====================== */
-
 const app = express();
 app.use(express.json());
 
@@ -24,213 +20,95 @@ const {
 	RECAP_CHANNEL_ID
 } = process.env;
 
-const QUEUE_FILE = "./queue.json";
-
-let botReady = false;
-
-/* ======================
-   QUEUE HELPERS
-====================== */
-
-function loadQueue() {
-	if (!fs.existsSync(QUEUE_FILE)) return [];
-	return JSON.parse(fs.readFileSync(QUEUE_FILE, "utf8"));
-}
-
-function saveQueue(queue) {
-	fs.writeFileSync(QUEUE_FILE, JSON.stringify(queue, null, 2));
-}
-
-function enqueue(command, args = []) {
-	const queue = loadQueue();
-	queue.push({ command, args });
-	saveQueue(queue);
-}
-
-/* ======================
-   DISCORD CLIENT (FIXED)
-====================== */
+const STATE_FILE = "./liveState.json";
 
 const client = new Client({
-	intents: [
-		GatewayIntentBits.Guilds,
-		GatewayIntentBits.GuildMessages,
-		GatewayIntentBits.MessageContent
-	]
+	intents: [GatewayIntentBits.Guilds]
 });
 
 /* ======================
-   SLASH COMMANDS
+   STATE ROUTE
 ====================== */
 
-const commands = [
-	{ name: "countdown", description: "Start the Hunger Games countdown" },
-	{ name: "day", description: "Start daytime" },
-	{ name: "night", description: "Start nighttime" },
-	{ name: "finale", description: "Start finale" },
-	{
-		name: "year",
-		description: "Set Hunger Games year",
-		options: [
-			{
-				name: "number",
-				description: "Year 1–100",
-				type: 4,
-				required: true
-			}
-		]
-	},
-	{ name: "sponsor", description: "Trigger sponsor event" },
-	{
-		name: "storm",
-		description: "Control storm weather",
-		options: [
-			{
-				name: "state",
-				description: "Start or stop the storm",
-				type: 3,
-				required: true,
-				choices: [
-					{ name: "start", value: "START" },
-					{ name: "stop", value: "STOP" }
-				]
-			}
-		]
-	}
-];
+app.post("/state", (req, res) => {
+	const { secret, state } = req.body;
+	if (secret !== SECRET) return res.sendStatus(403);
 
-async function registerCommands() {
-	const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+	fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+	res.sendStatus(200);
+});
 
-	if (GUILD_ID) {
-		await rest.put(
-			Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID),
-			{ body: commands }
-		);
-	} else {
-		await rest.put(
-			Routes.applicationCommands(CLIENT_ID),
-			{ body: commands }
-		);
+/* ======================
+   MAP RENDER
+====================== */
+
+function renderMap(tributes, size = 10) {
+	const grid = Array.from({ length: size }, () =>
+		Array(size).fill("⬛")
+	);
+
+	for (const t of tributes) {
+		if (!t.alive || !t.position) continue;
+
+		const x = Math.floor(t.position.x * (size - 1));
+		const z = Math.floor(t.position.z * (size - 1));
+
+		grid[z][x] = "🟢";
 	}
+
+	return grid.map(r => r.join("")).join("\n");
 }
 
 /* ======================
-   ROBLOX ROUTES
+   LIVE EMBED UPDATE
 ====================== */
 
-app.get("/poll", (req, res) => {
-	if (req.query.secret !== SECRET) return res.sendStatus(403);
+async function updateLiveEmbed() {
+	if (!fs.existsSync(STATE_FILE)) return;
 
-	const queue = loadQueue();
-	saveQueue([]);
-	res.json(queue);
-});
+	const state = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+	const channel = await client.channels.fetch(RECAP_CHANNEL_ID);
 
-/* ======================
-   RECAP ROUTE (FIXED)
-====================== */
+	const alive = state.tributes.filter(t => t.alive);
+	const dead = state.tributes.filter(t => !t.alive);
 
-app.post("/recap", async (req, res) => {
-	if (!botReady) {
-		console.error("❌ Bot not ready");
-		return res.sendStatus(503);
+	const tributeLines = state.tributes.map(t =>
+		`${t.alive ? "🟢" : "🔴"} ${t.name} (${t.kills}⚔️)`
+	);
+
+	const embed = {
+		title: `🏹 Hunger Games — ${state.gameState}`,
+		description: tributeLines.join("\n").slice(0, 4000),
+		fields: [
+			{ name: "Alive", value: `${alive.length}`, inline: true },
+			{ name: "Dead", value: `${dead.length}`, inline: true },
+			{
+				name: "Arena Map",
+				value: "```\n" + renderMap(state.tributes) + "\n```"
+			}
+		],
+		timestamp: new Date().toISOString()
+	};
+
+	const messages = await channel.messages.fetch({ limit: 1 });
+	const msg = messages.first();
+
+	if (msg && msg.author.id === client.user.id) {
+		await msg.edit({ embeds: [embed] });
+	} else {
+		await channel.send({ embeds: [embed] });
 	}
+}
 
-	const { secret, year, results } = req.body;
-
-	if (secret !== SECRET) return res.sendStatus(403);
-	if (!Array.isArray(results)) return res.sendStatus(400);
-
-	try {
-		console.log("📨 Sending recap to", RECAP_CHANNEL_ID);
-
-		const channel = await client.channels.fetch(RECAP_CHANNEL_ID);
-
-		if (!channel || !channel.isTextBased()) {
-			throw new Error("Invalid recap channel");
-		}
-
-		const lines = results.map(r =>
-			`**${r.PlacementText}** — ${r.Name} (${r.Kills} kills, ${r.Sponsors} sponsors)`
-		);
-
-		await channel.send(
-			`🏹 **Hunger Games ${year} Results** 🏹\n\n${lines.join("\n")}`
-		);
-
-		console.log("✅ Recap sent");
-		res.sendStatus(200);
-	} catch (err) {
-		console.error("❌ Recap error:", err);
-		res.sendStatus(500);
-	}
-});
-
-/* ======================
-   INTERACTIONS
-====================== */
-
-client.on(Events.InteractionCreate, async interaction => {
-	if (!interaction.isChatInputCommand()) return;
-
-	switch (interaction.commandName) {
-		case "countdown":
-			enqueue("COUNTDOWN");
-			await interaction.reply("⏳ Countdown started.");
-			break;
-
-		case "day":
-			enqueue("DAY");
-			await interaction.reply("🌞 Day started.");
-			break;
-
-		case "night":
-			enqueue("NIGHT");
-			await interaction.reply("🌙 Night started.");
-			break;
-
-		case "finale":
-			enqueue("FINALE");
-			await interaction.reply("🔥 Finale started.");
-			break;
-
-		case "year": {
-			const year = interaction.options.getInteger("number");
-			enqueue("YEAR", [year]);
-			await interaction.reply(`📅 Year set to ${year}`);
-			break;
-		}
-
-		case "sponsor":
-			enqueue("SPONSOR");
-			await interaction.reply("🎁 Sponsor triggered.");
-			break;
-
-		case "storm": {
-			const state = interaction.options.getString("state");
-			enqueue("STORM", [state]);
-			await interaction.reply(
-				state === "START" ? "🌩️ Storm started." : "☀️ Storm stopped."
-			);
-			break;
-		}
-	}
-});
+setInterval(updateLiveEmbed, 10_000);
 
 /* ======================
    READY
 ====================== */
 
-client.once(Events.ClientReady, async bot => {
+client.once(Events.ClientReady, bot => {
 	console.log(`🤖 Logged in as ${bot.user.tag}`);
-	botReady = true;
-	await registerCommands();
 });
-
-/* ======================
-   START
-====================== */
 
 app.listen(PORT, () => {
 	console.log(`🚀 HG Relay running on port ${PORT}`);
