@@ -84,7 +84,7 @@ scene.add(sun);
    ARENA OBJ
 ====================== */
 
-new OBJLoader().load("/arena.obj", obj => {
+new OBJLoader().load("./arena.obj", obj => {
 	obj.traverse(m => {
 		if (m.isMesh) {
 			m.material = new THREE.MeshStandardMaterial({
