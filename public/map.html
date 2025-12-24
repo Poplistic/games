@@ -2,14 +2,18 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Digital Arena Projection</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Hunger Games Arena – Fixed</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
-	body {
-		margin: 0;
-		overflow: hidden;
-		background: black;
+	body { margin: 0; overflow: hidden; background: black; }
+	.label {
+		position: absolute;
+		color: #fff;
+		font-size: 12px;
+		pointer-events: none;
+		transform: translate(-50%, -50%);
+		text-shadow: 0 0 6px red;
 	}
 </style>
 
@@ -35,8 +39,8 @@ import { OBJLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/j
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.setPixelRatio(devicePixelRatio);
+renderer.autoClear = false;
 document.body.appendChild(renderer.domElement);
 
 /* ======================
@@ -53,56 +57,60 @@ camera.position.set(0, 900, 1400);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-controls.dampingFactor = 0.08;
-controls.minDistance = 400;
-controls.maxDistance = 3000;
-controls.maxPolarAngle = Math.PI / 2.1;
 
 /* ======================
-   BASIC ARENA MATERIAL
+   LIGHTING
 ====================== */
 
-const arenaBaseMaterial = new THREE.MeshStandardMaterial({
-	color: 0x1a1a1a,
-	roughness: 0.9,
-	metalness: 0.1
-});
-
 scene.add(new THREE.AmbientLight(0x666666));
-const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(800, 1500, 600);
 scene.add(sun);
 
 /* ======================
-   LOAD ARENA
+   ARENA
 ====================== */
 
-const loader = new OBJLoader();
-loader.load("./arena.obj", obj => {
+new OBJLoader().load("./arena.obj", obj => {
 	obj.traverse(m => {
-		if (!m.isMesh) return;
-		m.material = arenaBaseMaterial;
+		if (m.isMesh) {
+			m.material = new THREE.MeshStandardMaterial({
+				color: 0x1a1a1a,
+				roughness: 0.9
+			});
+		}
 	});
 	scene.add(obj);
 });
 
 /* ======================
-   RENDER TARGET (SCENE → TEXTURE)
+   PLAYER MARKERS (RESTORED)
 ====================== */
 
-const renderTarget = new THREE.WebGLRenderTarget(innerWidth, innerHeight, {
-	colorSpace: THREE.SRGBColorSpace
-});
+const markers = [];
+
+function addMarker(x, z) {
+	const m = new THREE.Mesh(
+		new THREE.SphereGeometry(12, 16, 16),
+		new THREE.MeshBasicMaterial({ color: 0xff3333 })
+	);
+	m.position.set(x, 15, z);
+	scene.add(m);
+	markers.push(m);
+}
+
+// demo markers
+addMarker(100, 100);
+addMarker(-200, -50);
+addMarker(0, -300);
 
 /* ======================
-   PROJECTION SHADER MATERIAL
+   PROJECTION OVERLAY SHADER
 ====================== */
 
 const projectionMaterial = new THREE.ShaderMaterial({
 	uniforms: {
-		uTime: { value: 0 },
-		uResolution: { value: new THREE.Vector2(innerWidth, innerHeight) },
-		uScene: { value: renderTarget.texture }
+		uTime: { value: 0 }
 	},
 	vertexShader: `
 		void main() {
@@ -111,61 +119,29 @@ const projectionMaterial = new THREE.ShaderMaterial({
 	`,
 	fragmentShader: `
 		uniform float uTime;
-		uniform vec2 uResolution;
-		uniform sampler2D uScene;
 
-		float rand(vec2 seed) {
-			return fract(sin(dot(seed, vec2(12.9898,78.233))) * 43758.5453);
-		}
-
-		vec3 makeBlue(vec3 i) {
-			return vec3(0.0, 0.0, (i.r + i.g + i.b) / 3.0);
-		}
-
-		vec3 Scanline(vec3 color, vec2 uv) {
-			float scan = 0.95 + 0.05 * cos(3.14159 * (uv.y + uTime * 0.008) * 240.0);
-			float grille = 0.85 + 0.15 * cos(3.14159 * uv.x * 640.0);
-			return color * scan * grille * 1.2;
-		}
-
-		vec3 edgeSample(vec2 uv) {
-			if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
-				return vec3(0.0);
-			return texture2D(uScene, uv).rgb;
+		float rand(vec2 p) {
+			return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453);
 		}
 
 		void main() {
-			vec2 uv = gl_FragCoord.xy / uResolution;
-			uv.y = 1.0 - uv.y;
-
-			vec2 flickerUV = uv;
-			flickerUV.x += rand(vec2(0.0, uv.y) * uTime) * 0.005;
-			flickerUV.y += rand(vec2(0.0, uv.x) * uTime) * 0.005;
-
-			vec3 col = edgeSample(flickerUV);
-			col = Scanline(col, uv);
-			col = makeBlue(col);
-
-			gl_FragColor = vec4(col, 0.85);
+			vec2 uv = gl_FragCoord.xy / vec2(${innerWidth.toFixed(1)}, ${innerHeight.toFixed(1)});
+			float scan = sin((uv.y + uTime*0.1) * 400.0) * 0.04;
+			float flicker = rand(uv + uTime) * 0.05;
+			vec3 col = vec3(0.0, 0.3, 0.8) * (scan + flicker);
+			gl_FragColor = vec4(col, 0.35);
 		}
 	`,
 	transparent: true,
 	depthWrite: false
 });
 
-/* ======================
-   FULLSCREEN QUAD (OVERLAY)
-====================== */
-
-const quad = new THREE.Mesh(
-	new THREE.PlaneGeometry(2, 2),
+const overlayScene = new THREE.Scene();
+const overlayCam = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+overlayScene.add(new THREE.Mesh(
+	new THREE.PlaneGeometry(2,2),
 	projectionMaterial
-);
-quad.frustumCulled = false;
-
-const postScene = new THREE.Scene();
-const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-postScene.add(quad);
+));
 
 /* ======================
    ANIMATE
@@ -175,13 +151,9 @@ function animate() {
 	projectionMaterial.uniforms.uTime.value = performance.now() * 0.001;
 	controls.update();
 
-	// 1️⃣ render arena to texture
-	renderer.setRenderTarget(renderTarget);
-	renderer.render(scene, camera);
-
-	// 2️⃣ render projection overlay
-	renderer.setRenderTarget(null);
-	renderer.render(postScene, postCamera);
+	renderer.clear();
+	renderer.render(scene, camera);          // ✅ arena + markers
+	renderer.render(overlayScene, overlayCam); // ✅ projection overlay
 }
 renderer.setAnimationLoop(animate);
 
@@ -193,9 +165,6 @@ window.addEventListener("resize", () => {
 	camera.aspect = innerWidth / innerHeight;
 	camera.updateProjectionMatrix();
 	renderer.setSize(innerWidth, innerHeight);
-
-	renderTarget.setSize(innerWidth, innerHeight);
-	projectionMaterial.uniforms.uResolution.value.set(innerWidth, innerHeight);
 });
 </script>
 
