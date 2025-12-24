@@ -74,6 +74,14 @@ controls.maxPolarAngle = Math.PI / 2.1;
 controls.target.set(0, 0, 0);
 
 /* ======================
+   RAYCAST / FOCUS
+====================== */
+
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+let focusedPlayer = null;
+
+/* ======================
    LIGHTING
 ====================== */
 
@@ -140,9 +148,26 @@ const players = new Map();
 
 const markerGeo = new THREE.SphereGeometry(18, 16, 16);
 const markerMat = new THREE.MeshBasicMaterial({
-	color: 0x00ff00, // LIME
+	color: 0x00ff00,
 	transparent: true
 });
+
+/* ======================
+   FOCUS RING
+====================== */
+
+const focusRing = new THREE.Mesh(
+	new THREE.RingGeometry(26, 34, 32),
+	new THREE.MeshBasicMaterial({
+		color: 0x00ff00,
+		transparent: true,
+		opacity: 0.8,
+		side: THREE.DoubleSide
+	})
+);
+focusRing.rotation.x = -Math.PI / 2;
+focusRing.visible = false;
+scene.add(focusRing);
 
 /* ======================
    FETCH PLAYERS
@@ -186,6 +211,8 @@ async function updatePlayers() {
 				pl.mesh.material.opacity = pl.fade;
 				pl.label.material.opacity = pl.fade;
 
+				if (focusedPlayer === pl) focusedPlayer = null;
+
 				if (pl.fade <= 0) {
 					scene.remove(pl.mesh);
 					pl.mesh = null;
@@ -198,6 +225,34 @@ async function updatePlayers() {
 setInterval(updatePlayers, 1000);
 
 /* ======================
+   CLICK TO FOCUS
+====================== */
+
+addEventListener("click", e => {
+	mouse.x = (e.clientX / innerWidth) * 2 - 1;
+	mouse.y = -(e.clientY / innerHeight) * 2 + 1;
+
+	raycaster.setFromCamera(mouse, camera);
+
+	const meshes = [];
+	for (const pl of players.values()) {
+		if (pl.mesh) meshes.push(pl.mesh);
+	}
+
+	const hits = raycaster.intersectObjects(meshes);
+	if (!hits.length) return;
+
+	const hitMesh = hits[0].object;
+
+	for (const pl of players.values()) {
+		if (pl.mesh === hitMesh) {
+			focusedPlayer = pl;
+			break;
+		}
+	}
+});
+
+/* ======================
    VOLUMETRIC SHADER
 ====================== */
 
@@ -207,17 +262,13 @@ const VolumetricShader = {
 		tDepth: { value: depthTexture },
 		cameraNear: { value: camera.near },
 		cameraFar: { value: camera.far },
-
 		uPlayers: { value: Array.from({ length: MAX_PLAYERS }, () => new THREE.Vector3()) },
 		uPlayerCount: { value: 0 },
-
 		uGhosts: { value: Array.from({ length: MAX_PLAYERS }, () => new THREE.Vector3()) },
 		uGhostCount: { value: 0 },
-
 		uScanRadius: { value: 0 },
 		uScanWidth: { value: 120.0 }
 	},
-
 	vertexShader: `
 		varying vec2 vUv;
 		void main() {
@@ -225,21 +276,18 @@ const VolumetricShader = {
 			gl_Position = vec4(position.xy, 0.0, 1.0);
 		}
 	`,
-
 	fragmentShader: `
 		#include <packing>
 		uniform sampler2D tDiffuse;
 		uniform sampler2D tDepth;
 		uniform float cameraNear;
 		uniform float cameraFar;
-
 		uniform vec3 uPlayers[24];
 		uniform int uPlayerCount;
 		uniform vec3 uGhosts[24];
 		uniform int uGhostCount;
 		uniform float uScanRadius;
 		uniform float uScanWidth;
-
 		varying vec2 vUv;
 
 		float readDepth(vec2 uv) {
@@ -254,11 +302,9 @@ const VolumetricShader = {
 		vec3 raymarch(vec3 ro, vec3 rd, float maxT) {
 			vec3 col = vec3(0.0);
 			float t = 0.0;
-
 			for (int i = 0; i < 80; i++) {
 				if (t > maxT) break;
 				vec3 p = ro + rd * t;
-
 				float fog = exp(-length(p.xz) * 0.002);
 
 				float alive = 0.0;
@@ -267,19 +313,7 @@ const VolumetricShader = {
 					alive += glow(p, uPlayers[j]);
 				}
 
-				float ghost = 0.0;
-				for (int j = 0; j < 24; j++) {
-					if (j >= uGhostCount) break;
-					float ring = abs(length(p.xz) - uScanRadius);
-					ghost += glow(p, uGhosts[j]) * exp(-ring / uScanWidth);
-				}
-
-				col += (
-					vec3(0.2, 0.4, 0.8) * fog +
-					vec3(0.6, 0.9, 1.0) * alive +
-					vec3(0.8, 0.9, 1.0) * ghost
-				) * 0.025;
-
+				col += (vec3(0.2,0.4,0.8)*fog + vec3(0.6,0.9,1.0)*alive) * 0.025;
 				t += 35.0;
 			}
 			return col;
@@ -303,7 +337,6 @@ const VolumetricShader = {
 const composer = new EffectComposer(renderer);
 composer.renderTarget1.depthTexture = depthTexture;
 composer.renderTarget2.depthTexture = depthTexture;
-
 composer.addPass(new RenderPass(scene, camera));
 
 const volPass = new ShaderPass(VolumetricShader);
@@ -318,19 +351,30 @@ function animate(t) {
 	requestAnimationFrame(animate);
 	controls.update();
 
+	if (focusedPlayer && focusedPlayer.mesh) {
+		const pos = focusedPlayer.mesh.position;
+
+		controls.target.lerp(pos, 0.08);
+
+		const dir = camera.position.clone().sub(controls.target).normalize();
+		const desiredPos = pos.clone().add(dir.multiplyScalar(900));
+		camera.position.lerp(desiredPos, 0.05);
+
+		focusRing.position.set(pos.x, 1, pos.z);
+		focusRing.visible = true;
+	} else {
+		focusRing.visible = false;
+	}
+
 	volPass.uniforms.uScanRadius.value =
 		(t * 0.001 * SCAN_SPEED) % SCAN_MAX;
 
-	let alive = 0, ghosts = 0;
+	let alive = 0;
 	for (const pl of players.values()) {
 		if (pl.alive && alive < MAX_PLAYERS)
 			volPass.uniforms.uPlayers.value[alive++].copy(pl.lastPos);
-		if (!pl.alive && ghosts < MAX_PLAYERS)
-			volPass.uniforms.uGhosts.value[ghosts++].copy(pl.lastPos);
 	}
-
 	volPass.uniforms.uPlayerCount.value = alive;
-	volPass.uniforms.uGhostCount.value = ghosts;
 
 	composer.render();
 }
