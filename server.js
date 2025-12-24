@@ -20,7 +20,8 @@ const {
 	DISCORD_TOKEN,
 	CLIENT_ID,
 	GUILD_ID,
-	PORT = 10000
+	PORT = 10000,
+	RECAP_CHANNEL_ID
 } = process.env;
 
 const QUEUE_FILE = "./queue.json";
@@ -118,6 +119,36 @@ app.get("/poll", (req, res) => {
 	const queue = loadQueue();
 	saveQueue([]);
 	res.json(queue);
+});
+
+/* ======================
+   RECAP ROUTE (FIX)
+====================== */
+
+app.post("/recap", async (req, res) => {
+	const { secret, year, results } = req.body;
+
+	if (secret !== SECRET) return res.sendStatus(403);
+	if (!Array.isArray(results)) return res.sendStatus(400);
+
+	try {
+		const channel = await client.channels.fetch(RECAP_CHANNEL_ID);
+
+		const lines = results.map(r =>
+			`**${r.PlacementText}** — ${r.Name} (${r.Kills} kills, ${r.Sponsors} sponsors)`
+		);
+
+		await channel.send({
+			content:
+				`🏹 **Hunger Games ${year} Results** 🏹\n\n` +
+				lines.join("\n")
+		});
+
+		res.sendStatus(200);
+	} catch (err) {
+		console.error("Recap error:", err);
+		res.sendStatus(500);
+	}
 });
 
 /* ======================
