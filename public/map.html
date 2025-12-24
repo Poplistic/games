@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Hunger Games Arena – Fixed</title>
+<title>Hunger Games Arena – Volumetric</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
@@ -62,7 +62,7 @@ controls.enableDamping = true;
    LIGHTING
 ====================== */
 
-scene.add(new THREE.AmbientLight(0x666666));
+scene.add(new THREE.AmbientLight(0x555555));
 const sun = new THREE.DirectionalLight(0xffffff, 1.2);
 sun.position.set(800, 1500, 600);
 scene.add(sun);
@@ -84,31 +84,84 @@ new OBJLoader().load("./arena.obj", obj => {
 });
 
 /* ======================
-   PLAYER MARKERS (RESTORED)
+   PLAYER MARKERS (REAL DATA)
 ====================== */
 
-const markers = [];
+const markers = new Map();
+const MAX_PLAYERS = 32;
+const playerUniforms = Array(MAX_PLAYERS).fill().map(() => new THREE.Vector3());
 
-function addMarker(x, z) {
-	const m = new THREE.Mesh(
-		new THREE.SphereGeometry(12, 16, 16),
-		new THREE.MeshBasicMaterial({ color: 0xff3333 })
-	);
-	m.position.set(x, 15, z);
-	scene.add(m);
-	markers.push(m);
+async function updatePlayers() {
+	const res = await fetch("/map");
+	const players = await res.json();
+
+	players.forEach((p, i) => {
+		if (!markers.has(p.userId)) {
+			const m = new THREE.Mesh(
+				new THREE.SphereGeometry(10, 16, 16),
+				new THREE.MeshBasicMaterial({ color: 0xff3333 })
+			);
+			scene.add(m);
+			markers.set(p.userId, m);
+		}
+
+		const m = markers.get(p.userId);
+		m.position.set(p.x, 15, p.z);
+
+		if (i < MAX_PLAYERS) {
+			playerUniforms[i].set(p.x, 0.0, p.z);
+		}
+	});
 }
-
-// demo markers
-addMarker(100, 100);
-addMarker(-200, -50);
-addMarker(0, -300);
+setInterval(updatePlayers, 250);
 
 /* ======================
-   PROJECTION OVERLAY SHADER
+   PROJECTION SHADER (PLAYERS INJECTED)
 ====================== */
 
 const projectionMaterial = new THREE.ShaderMaterial({
+	uniforms: {
+		uTime: { value: 0 },
+		uPlayers: { value: playerUniforms },
+		uPlayerCount: { value: 0 }
+	},
+	vertexShader: `
+		void main() {
+			gl_Position = vec4(position, 1.0);
+		}
+	`,
+	fragmentShader: `
+		uniform float uTime;
+		uniform vec3 uPlayers[32];
+		uniform int uPlayerCount;
+
+		float beacon(vec2 uv, vec2 p) {
+			float d = length(uv - p);
+			return exp(-d * 40.0);
+		}
+
+		void main() {
+			vec2 uv = gl_FragCoord.xy / vec2(${innerWidth.toFixed(1)}, ${innerHeight.toFixed(1)});
+			vec3 col = vec3(0.0);
+
+			for (int i = 0; i < 32; i++) {
+				vec2 p = uPlayers[i].xz * 0.0005 + 0.5;
+				col += vec3(0.8, 0.2, 0.2) * beacon(uv, p);
+			}
+
+			col *= 0.6;
+			gl_FragColor = vec4(col, 0.6);
+		}
+	`,
+	transparent: true,
+	depthWrite: false
+});
+
+/* ======================
+   TRUE VOLUMETRIC LIGHT RAYS
+====================== */
+
+const volumetricMaterial = new THREE.ShaderMaterial({
 	uniforms: {
 		uTime: { value: 0 }
 	},
@@ -120,27 +173,45 @@ const projectionMaterial = new THREE.ShaderMaterial({
 	fragmentShader: `
 		uniform float uTime;
 
-		float rand(vec2 p) {
-			return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453);
-		}
-
 		void main() {
 			vec2 uv = gl_FragCoord.xy / vec2(${innerWidth.toFixed(1)}, ${innerHeight.toFixed(1)});
-			float scan = sin((uv.y + uTime*0.1) * 400.0) * 0.04;
-			float flicker = rand(uv + uTime) * 0.05;
-			vec3 col = vec3(0.0, 0.3, 0.8) * (scan + flicker);
-			gl_FragColor = vec4(col, 0.35);
+			vec2 p = uv * 2.0 - 1.0;
+
+			float t = 0.0;
+			float density = 0.0;
+
+			for (int i = 0; i < 48; i++) {
+				vec3 pos = vec3(p * t, t * 2.0);
+				float d = length(pos.xz);
+				density += exp(-d * 2.0) * 0.02;
+				t += 0.05;
+			}
+
+			vec3 col = vec3(0.2, 0.5, 1.0) * density;
+			gl_FragColor = vec4(col, density);
 		}
 	`,
 	transparent: true,
+	blending: THREE.AdditiveBlending,
 	depthWrite: false
 });
 
-const overlayScene = new THREE.Scene();
+/* ======================
+   OVERLAY SCENES
+====================== */
+
 const overlayCam = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
-overlayScene.add(new THREE.Mesh(
+
+const projectionScene = new THREE.Scene();
+projectionScene.add(new THREE.Mesh(
 	new THREE.PlaneGeometry(2,2),
 	projectionMaterial
+));
+
+const volumetricScene = new THREE.Scene();
+volumetricScene.add(new THREE.Mesh(
+	new THREE.PlaneGeometry(2,2),
+	volumetricMaterial
 ));
 
 /* ======================
@@ -148,12 +219,16 @@ overlayScene.add(new THREE.Mesh(
 ====================== */
 
 function animate() {
-	projectionMaterial.uniforms.uTime.value = performance.now() * 0.001;
+	const t = performance.now() * 0.001;
+	projectionMaterial.uniforms.uTime.value = t;
+	volumetricMaterial.uniforms.uTime.value = t;
+
 	controls.update();
 
 	renderer.clear();
-	renderer.render(scene, camera);          // ✅ arena + markers
-	renderer.render(overlayScene, overlayCam); // ✅ projection overlay
+	renderer.render(scene, camera);                 // arena + markers
+	renderer.render(projectionScene, overlayCam);  // projection
+	renderer.render(volumetricScene, overlayCam);  // volumetric rays
 }
 renderer.setAnimationLoop(animate);
 
