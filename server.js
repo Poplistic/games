@@ -26,6 +26,8 @@ const {
 
 const QUEUE_FILE = "./queue.json";
 
+let botReady = false;
+
 /* ======================
    QUEUE HELPERS
 ====================== */
@@ -46,11 +48,15 @@ function enqueue(command, args = []) {
 }
 
 /* ======================
-   DISCORD CLIENT
+   DISCORD CLIENT (FIXED)
 ====================== */
 
 const client = new Client({
-	intents: [GatewayIntentBits.Guilds]
+	intents: [
+		GatewayIntentBits.Guilds,
+		GatewayIntentBits.GuildMessages,
+		GatewayIntentBits.MessageContent
+	]
 });
 
 /* ======================
@@ -122,31 +128,41 @@ app.get("/poll", (req, res) => {
 });
 
 /* ======================
-   RECAP ROUTE (FIX)
+   RECAP ROUTE (FIXED)
 ====================== */
 
 app.post("/recap", async (req, res) => {
+	if (!botReady) {
+		console.error("❌ Bot not ready");
+		return res.sendStatus(503);
+	}
+
 	const { secret, year, results } = req.body;
 
 	if (secret !== SECRET) return res.sendStatus(403);
 	if (!Array.isArray(results)) return res.sendStatus(400);
 
 	try {
+		console.log("📨 Sending recap to", RECAP_CHANNEL_ID);
+
 		const channel = await client.channels.fetch(RECAP_CHANNEL_ID);
+
+		if (!channel || !channel.isTextBased()) {
+			throw new Error("Invalid recap channel");
+		}
 
 		const lines = results.map(r =>
 			`**${r.PlacementText}** — ${r.Name} (${r.Kills} kills, ${r.Sponsors} sponsors)`
 		);
 
-		await channel.send({
-			content:
-				`🏹 **Hunger Games ${year} Results** 🏹\n\n` +
-				lines.join("\n")
-		});
+		await channel.send(
+			`🏹 **Hunger Games ${year} Results** 🏹\n\n${lines.join("\n")}`
+		);
 
+		console.log("✅ Recap sent");
 		res.sendStatus(200);
 	} catch (err) {
-		console.error("Recap error:", err);
+		console.error("❌ Recap error:", err);
 		res.sendStatus(500);
 	}
 });
@@ -195,9 +211,7 @@ client.on(Events.InteractionCreate, async interaction => {
 			const state = interaction.options.getString("state");
 			enqueue("STORM", [state]);
 			await interaction.reply(
-				state === "START"
-					? "🌩️ Storm started."
-					: "☀️ Storm stopped."
+				state === "START" ? "🌩️ Storm started." : "☀️ Storm stopped."
 			);
 			break;
 		}
@@ -210,6 +224,7 @@ client.on(Events.InteractionCreate, async interaction => {
 
 client.once(Events.ClientReady, async bot => {
 	console.log(`🤖 Logged in as ${bot.user.tag}`);
+	botReady = true;
 	await registerCommands();
 });
 
