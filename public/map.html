@@ -35,7 +35,7 @@ import { OBJLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/j
 ====================== */
 
 const MAX_PLAYERS = 24;
-const SCAN_SPEED = 220;
+const SCAN_SPEED = 64;
 const SCAN_MAX = 3500;
 
 /* ======================
@@ -194,9 +194,9 @@ const VolumetricShader = {
 		uniform float cameraNear;
 		uniform float cameraFar;
 
-		uniform vec3 uPlayers[32];
+		uniform vec3 uPlayers[24];
 		uniform int uPlayerCount;
-		uniform vec3 uGhosts[32];
+		uniform vec3 uGhosts[24];
 		uniform int uGhostCount;
 		uniform float uScanRadius;
 		uniform float uScanWidth;
@@ -223,13 +223,13 @@ const VolumetricShader = {
 				float fog = exp(-length(p.xz) * 0.002);
 
 				float alive = 0.0;
-				for (int j = 0; j < 32; j++) {
+				for (int j = 0; j < 24; j++) {
 					if (j >= uPlayerCount) break;
 					alive += glow(p, uPlayers[j]);
 				}
 
 				float ghost = 0.0;
-				for (int j = 0; j < 32; j++) {
+				for (int j = 0; j < 24; j++) {
 					if (j >= uGhostCount) break;
 					float ring = abs(length(p.xz) - uScanRadius);
 					ghost += glow(p, uGhosts[j]) * exp(-ring / uScanWidth);
