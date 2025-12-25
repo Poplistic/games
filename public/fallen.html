@@ -4,75 +4,188 @@
 <meta charset="UTF-8">
 <title>Fallen Tributes</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
 <style>
-body { margin:0; background:#111; color:white; font-family:system-ui,sans-serif; padding:20px; }
-h1 { text-align:center; }
-.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:20px; max-width:1200px; margin:auto; }
-.card { background:rgba(30,30,30,.8); border-radius:12px; padding:12px; text-align:center; }
-img { width:150px; height:150px; border-radius:50%; border:4px solid #444; }
-.name { margin:8px 0 4px; font-size:18px; font-weight:bold; }
-.order { color:#aaa; font-size:14px; }
-#reset { position:fixed; bottom:20px; right:20px; padding:12px 24px; font-size:16px; background:#c00; color:white; border:none; border-radius:8px; cursor:pointer; display:none; }
-#adminPass { position:fixed; bottom:70px; right:20px; padding:8px; width:200px; }
+:root {
+	--cyan: #00ffff;
+	--cyan-soft: rgba(0,255,255,.25);
+	--bg: #02040a;
+}
+
+body {
+	margin:0;
+	background:radial-gradient(circle at top, #050b14, #02040a 70%);
+	color:#aefcff;
+	font-family:system-ui,sans-serif;
+	padding:24px;
+	overflow-x:hidden;
+}
+
+/* ===== Title ===== */
+h1 {
+	text-align:center;
+	letter-spacing:3px;
+	font-weight:600;
+	margin-bottom:30px;
+	text-shadow:
+		0 0 25px rgba(0,255,255,.6),
+		0 0 60px rgba(0,255,255,.25);
+}
+
+/* ===== Grid ===== */
+.grid {
+	display:grid;
+	grid-template-columns:repeat(auto-fill,minmax(180px,1fr));
+	gap:22px;
+	max-width:1200px;
+	margin:auto;
+}
+
+/* ===== Card ===== */
+.card {
+	position:relative;
+	background:
+		linear-gradient(180deg, rgba(0,255,255,.18), rgba(0,60,60,.05));
+	border-radius:16px;
+	padding:16px 12px 14px;
+	text-align:center;
+	border:1px solid rgba(0,255,255,.45);
+	box-shadow:
+		0 0 30px rgba(0,255,255,.3),
+		inset 0 0 40px rgba(0,255,255,.1);
+	backdrop-filter: blur(12px) saturate(140%);
+	overflow:hidden;
+}
+
+/* Scanlines */
+.card::before {
+	content:"";
+	position:absolute;
+	inset:0;
+	background:
+		repeating-linear-gradient(
+			180deg,
+			rgba(255,255,255,.04),
+			rgba(255,255,255,.04) 1px,
+			transparent 1px,
+			transparent 3px
+		);
+	pointer-events:none;
+}
+
+/* Edge glow */
+.card::after {
+	content:"";
+	position:absolute;
+	inset:-1px;
+	border-radius:16px;
+	box-shadow:0 0 30px rgba(0,255,255,.45);
+	opacity:.4;
+	pointer-events:none;
+}
+
+/* ===== Avatar ===== */
+img {
+	width:150px;
+	height:150px;
+	border-radius:50%;
+	border:3px solid rgba(0,255,255,.7);
+	box-shadow:
+		0 0 25px rgba(0,255,255,.8),
+		inset 0 0 20px rgba(0,255,255,.4);
+	margin-bottom:8px;
+}
+
+/* ===== Text ===== */
+.name {
+	margin:10px 0 4px;
+	font-size:18px;
+	font-weight:600;
+}
+
+.order {
+	color:#7ff;
+	font-size:13px;
+	opacity:.85;
+	letter-spacing:.5px;
+}
+
+/* ===== Admin Input ===== */
+#adminPass {
+	position:fixed;
+	bottom:90px;
+	right:24px;
+	width:220px;
+	background:rgba(0,0,0,.65);
+	border:1px solid rgba(0,255,255,.5);
+	color:#aefcff;
+	padding:10px;
+	border-radius:10px;
+	outline:none;
+	box-shadow:0 0 20px rgba(0,255,255,.4);
+}
+
+/* ===== Reset Button ===== */
+#reset {
+	position:fixed;
+	bottom:24px;
+	right:24px;
+	padding:14px 28px;
+	font-size:15px;
+	background:linear-gradient(180deg, #ff3333, #aa0000);
+	color:white;
+	border:none;
+	border-radius:12px;
+	cursor:pointer;
+	box-shadow:
+		0 0 25px rgba(255,0,0,.8),
+		inset 0 0 20px rgba(255,255,255,.15);
+	display:none;
+}
+
+/* ===== Ambient Scanline Drift ===== */
+body::after {
+	content:"";
+	position:fixed;
+	inset:0;
+	background:
+		repeating-linear-gradient(
+			180deg,
+			rgba(255,255,255,.02),
+			rgba(255,255,255,.02) 1px,
+			transparent 1px,
+			transparent 4px
+		);
+	animation: drift 6s linear infinite;
+	pointer-events:none;
+}
+
+@keyframes drift {
+	from { transform:translateY(0); }
+	to { transform:translateY(4px); }
+}
 </style>
 </head>
+
 <body>
+
 <h1>Fallen Tributes</h1>
 <div id="grid" class="grid"></div>
+
 <input type="password" id="adminPass" placeholder="Enter admin password">
 <button id="reset">Admin Reset</button>
 
 <script>
 function generatePassword() {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
-  let pass = "";
-  for (let i = 0; i < 16; i++) {
-    pass += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return pass;
+	const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+	let pass = "";
+	for (let i = 0; i < 16; i++) {
+		pass += chars.charAt(Math.floor(Math.random() * chars.length));
+	}
+	return pass;
 }
 
 const ADMIN_PASS = generatePassword();
-console.log("Admin password:", ADMIN_PASS);  // Check console for new password each load
+console.log("Admin password:", ADMIN_PASS);
 
-document.getElementById("adminPass").addEventListener("keydown", e => {
-  if (e.key === "Enter" && e.target.value === ADMIN_PASS) {
-    document.getElementById("reset").style.display = "block";
-    e.target.style.display = "none";
-  }
-});
-
-async function loadFallen(){
-  const res = await fetch("/dead");
-  if (!res.ok) return;
-  const data = await res.json();
-  const grid = document.getElementById("grid");
-  grid.innerHTML = "";
-  data.reverse().forEach((p, i) => {
-    const card = document.createElement("div");
-    card.className = "card";
-    const img = document.createElement("img");
-    img.src = `https://www.roblox.com/bust-thumbnail/image?userId=${p.id}&width=420&height=420&format=png`;
-    const name = document.createElement("div");
-    name.className = "name";
-    name.textContent = p.name;
-    const order = document.createElement("div");
-    order.className = "order";
-    order.textContent = `${data.length - i}th Fallen`;
-    card.append(img, name, order);
-    grid.appendChild(card);
-  });
-}
-
-document.getElementById("reset").addEventListener("click", async () => {
-  if (confirm("Reset all fallen tributes?")) {
-    await fetch("/reset-dead", { method: "POST" });
-    loadFallen();
-  }
-});
-
-loadFallen();
-setInterval(loadFallen, 5000);
-</script>
-</body>
-</html>
+document.getElementById("adminPass").addEventListener("keydown", e =>
