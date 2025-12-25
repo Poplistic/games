@@ -4,6 +4,16 @@ import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/exampl
 import { Sky } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/objects/Sky.js";
 
 /* ======================
+   CONFIG
+====================== */
+
+const DOT_RADIUS = 5;
+const HITBOX_RADIUS = 40;
+const PREDICTION_TIME = 0.15; // seconds
+const TRACK_ZOOM = 900;
+const FREE_ZOOM = 2600;
+
+/* ======================
    RENDERER
 ====================== */
 
@@ -27,7 +37,7 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
 /* ======================
-   SKY
+   SKY / LIGHTS
 ====================== */
 
 const sky = new Sky();
@@ -40,78 +50,114 @@ sky.material.uniforms.rayleigh.value = 2;
 sky.material.uniforms.mieCoefficient.value = 0.005;
 sky.material.uniforms.mieDirectionalG.value = 0.8;
 
-/* ======================
-   LIGHTS
-====================== */
-
 const dirLight = new THREE.DirectionalLight(0xffffff, 3);
 scene.add(dirLight);
 scene.add(new THREE.AmbientLight(0x404060, 0.4));
 
 /* ======================
-   PLAYERS
+   PLAYER MARKERS
 ====================== */
 
 const playerGroup = new THREE.Group();
 scene.add(playerGroup);
 
-const DOT_RADIUS = 6;          // visual size
-const HITBOX_RADIUS = 40;      // clickable size (mobile friendly)
+function makeMarker() {
+	const g = new THREE.Group();
 
-function makePlayerMarker() {
-	const group = new THREE.Group();
-
-	// Visible dot
+	// Dot
 	const dot = new THREE.Mesh(
 		new THREE.SphereGeometry(DOT_RADIUS, 16, 16),
 		new THREE.MeshBasicMaterial({ color: 0x00ff00 })
 	);
-	group.add(dot);
+	g.add(dot);
 
-	// Invisible hitbox
+	// Highlight ring
+	const ring = new THREE.Mesh(
+		new THREE.RingGeometry(10, 14, 32),
+		new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0 })
+	);
+	ring.rotation.x = -Math.PI / 2;
+	g.add(ring);
+
+	// Direction arrow
+	const arrow = new THREE.ArrowHelper(
+		new THREE.Vector3(0, 0, 1),
+		new THREE.Vector3(0, 0, 0),
+		80,
+		0x00ffff
+	);
+	arrow.visible = false;
+	g.add(arrow);
+
+	// Hitbox
 	const hitbox = new THREE.Mesh(
 		new THREE.SphereGeometry(HITBOX_RADIUS, 16, 16),
 		new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 })
 	);
-	hitbox.userData.isHitbox = true;
-	group.add(hitbox);
+	g.add(hitbox);
 
-	group.userData = {
+	g.userData = {
 		dot,
+		ring,
+		arrow,
 		hitbox,
-		lastHealth: -1
+		lastPos: null,
+		velocity: new THREE.Vector3()
 	};
 
-	return group;
+	return g;
 }
 
-const playerMarkers = new Map();
+const markers = new Map();
+let tracked = null;
 
 /* ======================
-   PLAYER UPDATES
+   UPDATE PLAYERS
 ====================== */
 
-function updatePlayers(data) {
+function updatePlayers(list) {
 	const seen = new Set();
 
-	for (const p of data) {
+	for (const p of list) {
 		seen.add(p.id);
 
-		if (!playerMarkers.has(p.id)) {
-			const m = makePlayerMarker();
+		if (!markers.has(p.id)) {
+			const m = makeMarker();
 			playerGroup.add(m);
-			playerMarkers.set(p.id, m);
+			markers.set(p.id, m);
 		}
 
-		const m = playerMarkers.get(p.id);
-		m.position.set(p.x, 20, p.z);
-		m.userData.playerId = p.id;
+		const m = markers.get(p.id);
+		const now = performance.now() / 1000;
+
+		const pos = new THREE.Vector3(p.x, 20, p.z);
+
+		if (m.userData.lastPos) {
+			const dt = Math.max(now - m.userData.lastTime, 0.016);
+			m.userData.velocity.copy(pos).sub(m.userData.lastPos).divideScalar(dt);
+		}
+
+		m.userData.lastPos = pos.clone();
+		m.userData.lastTime = now;
+
+		const predicted = pos.clone().add(
+			m.userData.velocity.clone().multiplyScalar(PREDICTION_TIME)
+		);
+
+		m.position.lerp(predicted, 0.5);
+
+		// Direction arrow
+		if (p.lookX !== undefined) {
+			m.userData.arrow.setDirection(
+				new THREE.Vector3(p.lookX, 0, p.lookZ).normalize()
+			);
+		}
 	}
 
-	for (const [id, marker] of playerMarkers) {
+	for (const [id, m] of markers) {
 		if (!seen.has(id)) {
-			playerGroup.remove(marker);
-			playerMarkers.delete(id);
+			playerGroup.remove(m);
+			markers.delete(id);
 		}
 	}
 }
@@ -128,41 +174,38 @@ setInterval(async () => {
 }, 200);
 
 /* ======================
-   CLICK / TOUCH TRACKING
+   CLICK / TOUCH
 ====================== */
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
-let trackedMarker = null;
 
-function handlePointer(event) {
+function pick(event) {
 	const rect = renderer.domElement.getBoundingClientRect();
+	const e = event.touches ? event.touches[0] : event;
 
-	const clientX = event.touches ? event.touches[0].clientX : event.clientX;
-	const clientY = event.touches ? event.touches[0].clientY : event.clientY;
-
-	pointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-	pointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+	pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+	pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
 	raycaster.setFromCamera(pointer, camera);
 
 	const hitboxes = [];
-	playerMarkers.forEach(m => hitboxes.push(m.userData.hitbox));
+	markers.forEach(m => hitboxes.push(m.userData.hitbox));
 
-	const hits = raycaster.intersectObjects(hitboxes, false);
+	const hits = raycaster.intersectObjects(hitboxes);
 
-	if (hits.length > 0) {
-		trackedMarker = hits[0].object.parent;
+	if (hits.length) {
+		tracked = hits[0].object.parent;
 	} else {
-		trackedMarker = null;
+		tracked = null;
 	}
 }
 
-renderer.domElement.addEventListener("click", handlePointer);
-renderer.domElement.addEventListener("touchstart", handlePointer, { passive: true });
+renderer.domElement.addEventListener("click", pick);
+renderer.domElement.addEventListener("touchstart", pick, { passive: true });
 
 /* ======================
-   ANIMATE
+   ANIMATION LOOP
 ====================== */
 
 function animate() {
@@ -175,10 +218,29 @@ function animate() {
 		dirLight.intensity = lighting.brightness * 1.2;
 	}
 
-	// Smooth camera tracking
-	if (trackedMarker) {
-		const target = trackedMarker.position.clone();
-		controls.target.lerp(target, 0.1);
+	// Marker visuals
+	markers.forEach(m => {
+		const selected = m === tracked;
+		m.userData.dot.material.color.set(selected ? 0x00ffff : 0x00ff00);
+		m.userData.arrow.visible = selected;
+
+		m.userData.ring.material.opacity = selected
+			? 0.5 + Math.sin(performance.now() * 0.005) * 0.25
+			: 0;
+	});
+
+	// Camera tracking + zoom
+	if (tracked) {
+		controls.target.lerp(tracked.position, 0.1);
+		camera.position.lerp(
+			tracked.position.clone().add(new THREE.Vector3(0, TRACK_ZOOM, TRACK_ZOOM)),
+			0.05
+		);
+	} else {
+		camera.position.lerp(
+			new THREE.Vector3(2000, FREE_ZOOM, 2000),
+			0.02
+		);
 	}
 
 	controls.update();
