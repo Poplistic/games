@@ -6,45 +6,64 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
-html,body{
-	margin:0;
-	width:100%;
-	height:100%;
-	overflow:hidden;
-	background:radial-gradient(circle at 50% 15%, #160406, #020001);
-	font-family:system-ui,Segoe UI,sans-serif;
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  font-family: system-ui, Segoe UI, sans-serif;
+  background: radial-gradient(circle at 50% 15%, #160406, #020001);
+  transition: background 0.3s;
 }
-#hud{
-	position:fixed;
-	top:16px;
-	left:16px;
-	z-index:10;
+body.light {
+  background: radial-gradient(circle at 50% 15%, #eee, #aaa);
 }
-.ui{
-	min-width:180px;
-	color:#ffe8ee;
-	background:linear-gradient(180deg,rgba(120,20,30,.35),rgba(40,5,10,.4));
-	backdrop-filter:blur(14px);
-	border:1px solid rgba(255,120,140,.35);
-	border-radius:16px;
-	padding:12px;
-	box-shadow:0 14px 40px rgba(120,20,40,.45);
+
+#sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 280px;
+  height: 100%;
+  background: rgba(20,10,15,0.85);
+  backdrop-filter: blur(14px);
+  color: #ffe8ee;
+  overflow-y: auto;
+  transition: transform 0.3s;
+  z-index: 10;
+  padding: 16px;
 }
-.ui b{
-	font-size:11px;
-	letter-spacing:.12em;
-	text-transform:uppercase;
+body.light #sidebar {
+  background: rgba(250,250,250,0.9);
+  color: #111;
 }
-.name{
-	margin-top:6px;
-	padding:6px 8px;
-	border-radius:10px;
-	cursor:pointer;
-	background:rgba(255,80,100,.08);
+#sidebar.collapsed {
+  transform: translateX(-280px);
 }
-.name:hover{
-	background:rgba(255,120,140,.28);
+#sidebar h2 { margin-top:0; }
+#toggleSidebar {
+  position: fixed;
+  left: 280px;
+  top: 16px;
+  z-index: 20;
+  background: #ff6b7a;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-radius: 8px;
 }
+body.light #toggleSidebar { background: #666; }
+
+.name {
+  padding: 6px 8px;
+  border-radius: 6px;
+  margin: 2px 0;
+  cursor: pointer;
+}
+.name:hover { background: rgba(255,120,140,0.3); }
+
+#settings { margin-top: 20px; }
 </style>
 
 <script type="importmap">
@@ -57,7 +76,16 @@ html,body{
 </head>
 
 <body>
-<div id="hud"><div class="ui" id="ui"></div></div>
+<div id="sidebar">
+  <h2>Tributes</h2>
+  <div id="tributeList"></div>
+
+  <div id="settings">
+    <h3>Settings</h3>
+    <button id="toggleTheme">Toggle Dark/Light Mode</button>
+  </div>
+</div>
+<button id="toggleSidebar">☰</button>
 
 <script type="module">
 import * as THREE from "three";
@@ -65,148 +93,114 @@ import { OBJLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/j
 
 /* ================= RENDERER ================= */
 const renderer = new THREE.WebGLRenderer({ antialias:true });
-renderer.setSize(innerWidth,innerHeight);
+renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(devicePixelRatio);
-renderer.autoClear = false;
 document.body.appendChild(renderer.domElement);
 
 /* ================= SCENE ================= */
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x050001);
-
-const camera = new THREE.PerspectiveCamera(60,innerWidth/innerHeight,1,20000);
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 20000);
 camera.position.set(0,1200,1800);
 
-/* ================= LIGHTING ================= */
-scene.add(new THREE.AmbientLight(0xffffff,.35));
+/* ================= LIGHT ================= */
+scene.add(new THREE.AmbientLight(0xffffff,0.35));
 const sun = new THREE.DirectionalLight(0xffc0cc,1.3);
 sun.position.set(3000,6000,2000);
 scene.add(sun);
 
-/* ================= ARENA ================= */
+/* ================= ARENA MESH ================= */
 const arenaGroup = new THREE.Group();
 scene.add(arenaGroup);
 
+const floorShaderUniforms = { time: { value: 0 } };
+let arenaMesh;
+
 new OBJLoader().load("/arena.obj", obj=>{
-	obj.traverse(n=>{
-		if(n.isMesh){
-			n.material = new THREE.MeshStandardMaterial({
-				color:0x5a141d,
-				roughness:.65,
-				metalness:.08,
-				emissive:0x2a060b,
-				emissiveIntensity:.35
-			});
-		}
-	});
-	obj.scale.setScalar(4);
-	arenaGroup.add(obj);
+  obj.traverse(n=>{
+    if(n.isMesh){
+      // Shader material with scanlines projected onto arena
+      n.material = new THREE.ShaderMaterial({
+        uniforms: floorShaderUniforms,
+        vertexShader: `
+          varying vec2 vUv;
+          void main(){
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+          }
+        `,
+        fragmentShader: `
+          precision highp float;
+          varying vec2 vUv;
+          uniform float time;
+          void main(){
+            vec3 col = vec3(0.35,0.07,0.1);
+            float scan = sin(vUv.x * 100.0 + time*5.0)*0.03;
+            col += scan;
+            gl_FragColor = vec4(col,1.0);
+          }
+        `
+      });
+    }
+  });
+  obj.scale.setScalar(4);
+  arenaGroup.add(obj);
+  arenaMesh = obj;
 });
-
-/* ================= FLOOR WITH SCANLINES ================= */
-const floorGeo = new THREE.PlaneGeometry(5000, 5000, 1, 1);
-const floorMat = new THREE.ShaderMaterial({
-	uniforms: {
-		time: { value: 0 }
-	},
-	vertexShader: `
-		varying vec2 vUv;
-		void main(){
-			vUv = uv;
-			gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
-		}
-	`,
-	fragmentShader: `
-		precision highp float;
-		varying vec2 vUv;
-		uniform float time;
-
-		void main(){
-			vec3 col = vec3(0.08,0.02,0.04); // base floor color
-			float scan = sin(vUv.x*200.0 + time*5.0) * 0.03; // scanline effect along X
-			col += scan;
-			gl_FragColor = vec4(col,1.0);
-		}
-	`,
-	side: THREE.DoubleSide
-});
-const floor = new THREE.Mesh(floorGeo, floorMat);
-floor.rotation.x = -Math.PI/2;
-floor.position.y = 0;
-scene.add(floor);
-
-/* ================= UI ================= */
-const ui = document.getElementById("ui");
 
 /* ================= PLAYERS ================= */
 const players = new Map();
-
-function makePlayer(){
-	const g = new THREE.Group();
-
-	// Player body
-	const body = new THREE.Mesh(
-		new THREE.SphereGeometry(10,24,24),
-		new THREE.MeshStandardMaterial({
-			color:0xff6b7a,
-			emissive:0xff2a40,
-			emissiveIntensity:.7
-		})
-	);
-	g.add(body);
-
-	// Directional line
-	const dirMat = new THREE.LineBasicMaterial({
-		color:0xff6b7a,
-		transparent:true,
-		opacity:0.7
-	});
-	const points = [new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-80)];
-	const dirGeo = new THREE.BufferGeometry().setFromPoints(points);
-	const dirLine = new THREE.Line(dirGeo, dirMat);
-	dirLine.rotation.x = Math.PI/2;
-	g.add(dirLine);
-	g.userData.dirLine = dirLine;
-
-	return g;
-}
-
-/* ================= UPDATE ================= */
 let follow = null;
 
+function makePlayer(){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.SphereGeometry(10,24,24),
+    new THREE.MeshStandardMaterial({ color:0xff6b7a, emissive:0xff2a40, emissiveIntensity:0.7 })
+  );
+  g.add(body);
+
+  const dirLineMat = new THREE.LineBasicMaterial({ color:0xff6b7a, opacity:0.7, transparent:true });
+  const points = [new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-80)];
+  const dirLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), dirLineMat);
+  dirLine.rotation.x = Math.PI/2;
+  g.add(dirLine);
+  g.userData.dirLine = dirLine;
+
+  return g;
+}
+
+/* ================= UPDATE PLAYERS ================= */
 async function updatePlayers(){
-	const data = await fetch("/map").then(r=>r.json());
-	ui.innerHTML="<b>Tributes</b>";
-	const alive = new Set();
+  const data = await fetch("/map").then(r=>r.json());
+  const tributeList = document.getElementById("tributeList");
+  tributeList.innerHTML = "";
+  const alive = new Set();
 
-	for(const p of data){
-		alive.add(p.id);
-		if(!players.has(p.id)){
-			const m = makePlayer();
-			scene.add(m);
-			players.set(p.id,m);
-		}
-		const m = players.get(p.id);
-		m.position.set(p.x,p.y+20,p.z);
-		m.rotation.y = p.yaw;
+  for(const p of data){
+    alive.add(p.id);
+    if(!players.has(p.id)){
+      const m = makePlayer();
+      scene.add(m);
+      players.set(p.id, m);
+    }
+    const m = players.get(p.id);
+    m.position.set(p.x, p.y+20, p.z);
+    m.rotation.y = p.yaw;
+    if(m.userData.dirLine) m.userData.dirLine.rotation.z = p.pitch;
 
-		if(m.userData.dirLine){
-			m.userData.dirLine.rotation.z = p.pitch;
-		}
+    const d = document.createElement("div");
+    d.className = "name";
+    d.textContent = p.name;
+    d.onclick = ()=> follow = m;
+    tributeList.appendChild(d);
+  }
 
-		const d=document.createElement("div");
-		d.className="name";
-		d.textContent=p.name;
-		d.onclick=()=>follow=m;
-		ui.appendChild(d);
-	}
-
-	for(const [id,m] of players){
-		if(!alive.has(id)){
-			scene.remove(m);
-			players.delete(id);
-		}
-	}
+  for(const [id, m] of players){
+    if(!alive.has(id)){
+      scene.remove(m);
+      players.delete(id);
+    }
+  }
 }
 setInterval(updatePlayers,200);
 
@@ -216,130 +210,79 @@ const keys = { w:false,a:false,s:false,d:false,shift:false };
 let rotating=false;
 
 renderer.domElement.addEventListener("mousedown",e=>{
-	if(e.button===0){
-		rotating=true;
-		renderer.domElement.requestPointerLock();
-	}
+  if(e.button===0){ rotating=true; renderer.domElement.requestPointerLock(); }
 });
 addEventListener("mouseup",()=>{ rotating=false; document.exitPointerLock(); });
 addEventListener("mousemove",e=>{
-	if(rotating && document.pointerLockElement){
-		cam.yaw -= e.movementX*0.002;
-		cam.pitch = Math.max(-1.4,Math.min(1.4,cam.pitch-e.movementY*0.002));
-	}
+  if(rotating && document.pointerLockElement){
+    cam.yaw -= e.movementX*0.002;
+    cam.pitch = Math.max(-1.4, Math.min(1.4, cam.pitch - e.movementY*0.002));
+  }
 });
 addEventListener("keydown",e=>{
-	if(e.code==="KeyW")keys.w=true;
-	if(e.code==="KeyA")keys.a=true;
-	if(e.code==="KeyS")keys.s=true;
-	if(e.code==="KeyD")keys.d=true;
-	if(e.code==="ShiftLeft")keys.shift=true;
-	if("KeyWKeyAKeySKeyD".includes(e.code)) follow=null;
+  if(e.code==="KeyW") keys.w=true;
+  if(e.code==="KeyA") keys.a=true;
+  if(e.code==="KeyS") keys.s=true;
+  if(e.code==="KeyD") keys.d=true;
+  if(e.code==="ShiftLeft") keys.shift=true;
+  if("KeyWKeyAKeySKeyD".includes(e.code)) follow=null;
 });
 addEventListener("keyup",e=>{
-	if(e.code==="KeyW")keys.w=false;
-	if(e.code==="KeyA")keys.a=false;
-	if(e.code==="KeyS")keys.s=false;
-	if(e.code==="KeyD")keys.d=false;
-	if(e.code==="ShiftLeft")keys.shift=false;
+  if(e.code==="KeyW") keys.w=false;
+  if(e.code==="KeyA") keys.a=false;
+  if(e.code==="KeyS") keys.s=false;
+  if(e.code==="KeyD") keys.d=false;
+  if(e.code==="ShiftLeft") keys.shift=false;
 });
-
-/* ================= POST FX (depth/fog/glow) ================= */
-const rt = new THREE.WebGLRenderTarget(innerWidth,innerHeight);
-rt.depthTexture = new THREE.DepthTexture();
-
-const postScene = new THREE.Scene();
-const postCam = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
-
-const postMat = new THREE.ShaderMaterial({
-	uniforms:{
-		tColor:{value:rt.texture},
-		tDepth:{value:rt.depthTexture},
-		res:{value:new THREE.Vector2(innerWidth,innerHeight)},
-		near:{value:camera.near},
-		far:{value:camera.far},
-		time:{value:0}
-	},
-	vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position.xy,0,1);}`,
-	fragmentShader:`
-precision highp float;
-varying vec2 vUv;
-uniform sampler2D tColor,tDepth;
-uniform vec2 res;
-uniform float near,far;
-uniform float time;
-
-float lin(float d){
-	float z = d*2.0 - 1.0;
-	return (2.0*near*far)/(far + near - z*(far-near));
-}
-
-void main(){
-	vec3 col = texture2D(tColor,vUv).rgb;
-	float depth = lin(texture2D(tDepth,vUv).r)/far;
-
-	vec3 fogColor = vec3(0.08,0.02,0.04);
-	col = mix(col,fogColor,smoothstep(0.3,1.0,depth));
-
-	vec2 px = 1.0/res;
-	float edge = abs(depth - lin(texture2D(tDepth,vUv+vec2(px.x,0)).r)/far)
-	           + abs(depth - lin(texture2D(tDepth,vUv+vec2(0,px.y)).r)/far);
-	col += edge*vec3(1.0,0.3,0.4);
-
-	gl_FragColor = vec4(col,1.0);
-}`
-});
-postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),postMat));
 
 /* ================= LOOP ================= */
 function animate(){
-	requestAnimationFrame(animate);
+  requestAnimationFrame(animate);
+  const delta = 0.016;
 
-	camera.rotation.order="YXZ";
-	camera.rotation.y=cam.yaw;
-	camera.rotation.x=cam.pitch;
+  camera.rotation.order="YXZ";
+  camera.rotation.y = cam.yaw;
+  camera.rotation.x = cam.pitch;
 
-	const forward = new THREE.Vector3(0,0,-1).applyEuler(camera.rotation);
-	const right   = new THREE.Vector3(1,0,0).applyEuler(camera.rotation);
+  const forward = new THREE.Vector3(0,0,-1).applyEuler(camera.rotation);
+  const right = new THREE.Vector3(1,0,0).applyEuler(camera.rotation);
+  let mult = cam.baseSpeed;
+  if(keys.shift) mult *= cam.boost;
+  if(keys.w) cam.velocity.addScaledVector(forward, cam.accel*mult);
+  if(keys.s) cam.velocity.addScaledVector(forward, -cam.accel*mult);
+  if(keys.a) cam.velocity.addScaledVector(right, -cam.accel*mult);
+  if(keys.d) cam.velocity.addScaledVector(right, cam.accel*mult);
 
-	let mult = cam.baseSpeed;
-	if(keys.shift) mult*=cam.boost;
+  cam.velocity.multiplyScalar(cam.damping);
+  camera.position.add(cam.velocity);
 
-	if(keys.w) cam.velocity.addScaledVector(forward, cam.accel*mult);
-	if(keys.s) cam.velocity.addScaledVector(forward,-cam.accel*mult);
-	if(keys.a) cam.velocity.addScaledVector(right,-cam.accel*mult);
-	if(keys.d) cam.velocity.addScaledVector(right,cam.accel*mult);
+  if(follow){
+    const t = follow.position.clone();
+    const off = new THREE.Vector3(0,140,-320).applyEuler(camera.rotation);
+    camera.position.lerp(t.add(off),0.08);
+    cam.velocity.set(0,0,0);
+  }
 
-	cam.velocity.multiplyScalar(cam.damping);
-	camera.position.add(cam.velocity);
+  if(floorShaderUniforms.time) floorShaderUniforms.time.value = performance.now()*0.001;
 
-	if(follow){
-		const t = follow.position.clone();
-		const off = new THREE.Vector3(0,140,-320).applyEuler(camera.rotation);
-		camera.position.lerp(t.add(off),.08);
-		cam.velocity.set(0,0,0);
-	}
-
-	// animate floor shader
-	floorMat.uniforms.time.value = performance.now()*0.001;
-
-	// animate postFX
-	postMat.uniforms.time.value = performance.now()*0.001;
-
-	renderer.setRenderTarget(rt);
-	renderer.render(scene,camera);
-	renderer.setRenderTarget(null);
-	renderer.render(postScene,postCam);
+  renderer.render(scene,camera);
 }
 animate();
 
+/* ================= RESIZE ================= */
 addEventListener("resize",()=>{
-	renderer.setSize(innerWidth,innerHeight);
-	rt.setSize(innerWidth,innerHeight);
-	camera.aspect=innerWidth/innerHeight;
-	camera.updateProjectionMatrix();
-	postMat.uniforms.res.value.set(innerWidth,innerHeight);
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
 });
+
+/* ================= SIDEBAR ================= */
+const sidebar = document.getElementById("sidebar");
+document.getElementById("toggleSidebar").onclick = ()=> sidebar.classList.toggle("collapsed");
+
+document.getElementById("toggleTheme").onclick = ()=>{
+  document.body.classList.toggle("light");
+};
 </script>
 </body>
 </html>
