@@ -39,6 +39,7 @@ document.body.appendChild(renderer.domElement);
 /* ================= SCENE ================= */
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x050001);
+
 const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 20000);
 camera.position.set(0,1200,1800);
 
@@ -79,43 +80,45 @@ function makePlayer(bustUrl) {
     const plane = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), mat);
     plane.rotation.x = -Math.PI / 2; // lay flat on floor
     g.add(plane);
-    g.userData.plane = plane; // store reference for camera-facing
+    g.userData.plane = plane;
     return g;
 }
 
-/* ================= UPDATE PLAYERS ================= */
-async function updatePlayers() {
-    const data = await fetch("/map").then(r => r.json());
-    ui.innerHTML = "<b>Tributes</b>";
-    const alive = new Set();
+/* ================= PLAYERS UPDATE ================= */
+const players = new Map();
+let follow = null;
 
-    for (const p of data) {
-        alive.add(p.id);
-        if (!players.has(p.id)) {
-            const m = makePlayer(p.bustUrl); // use bustUrl from server
-            scene.add(m);
-            players.set(p.id, m);
-        }
+async function updatePlayers(){
+	const data = await fetch("/map").then(r => r.json());
+	ui.innerHTML="<b>Tributes</b>";
+	const alive = new Set();
 
-        const m = players.get(p.id);
-        m.position.set(p.x, p.y + 20, p.z);
-        m.rotation.y = p.yaw; // optional if you want orientation
+	for(const p of data){
+		alive.add(p.id);
+		if(!players.has(p.id)){
+			const m = makePlayer(p.bustUrl);
+			scene.add(m);
+			players.set(p.id,m);
+		}
+		const m = players.get(p.id);
+		m.position.set(p.x,p.y+20,p.z);
+		m.rotation.y=p.yaw;
 
-        const d = document.createElement("div");
-        d.className = "name";
-        d.textContent = p.name;
-        d.onclick = () => follow = m;
-        ui.appendChild(d);
-    }
+		const d=document.createElement("div");
+		d.className="name";
+		d.textContent=p.name;
+		d.onclick=()=>follow=m;
+		ui.appendChild(d);
+	}
 
-    for (const [id, m] of players) {
-        if (!alive.has(id)) {
-            scene.remove(m);
-            players.delete(id);
-        }
-    }
+	for(const [id,m] of players){
+		if(!alive.has(id)){
+			scene.remove(m);
+			players.delete(id);
+		}
+	}
 }
-setInterval(updatePlayers,24);
+setInterval(updatePlayers,200);
 
 /* ================= CAMERA CONTROLS ================= */
 const cam={yaw:0,pitch:0,velocity:new THREE.Vector3(),accel:2.4,damping:.88,baseSpeed:18,boost:3};
@@ -187,10 +190,6 @@ postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),postMat));
 function animate(){
 	requestAnimationFrame(animate);
 
-	players.forEach(p => {
-  		p.userData.plane.lookAt(camera.position);
-	});
-	
 	camera.rotation.order="YXZ";
 	camera.rotation.y=cam.yaw;
 	camera.rotation.x=cam.pitch;
@@ -218,11 +217,10 @@ function animate(){
 
 	// Make player planes face camera
 	players.forEach(p=>{
-		const plane=p.children[0];
-		plane.lookAt(camera.position);
+		p.userData.plane.lookAt(camera.position);
 	});
 
-	// Render arena with post FX
+	// Render scene with post FX
 	renderer.setRenderTarget(rt);
 	renderer.render(scene,camera);
 	renderer.setRenderTarget(null);
@@ -237,6 +235,17 @@ addEventListener("resize",()=>{
 	camera.aspect=innerWidth/innerHeight;
 	camera.updateProjectionMatrix();
 	postMat.uniforms.res.value.set(innerWidth,innerHeight);
+});
+
+/* ================= SOCKET.IO KILL FEED ================= */
+const socket = io();
+socket.on("kill:feed", feed => {
+	killFeedEl.innerHTML = "";
+	feed.forEach(item => {
+		const div = document.createElement("div");
+		div.textContent = item.text;
+		killFeedEl.appendChild(div);
+	});
 });
 </script>
 
