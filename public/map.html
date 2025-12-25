@@ -298,20 +298,19 @@ function animate() {
     camera.rotation.y = cam.yaw;
     camera.rotation.x = cam.pitch;
 
+    // Camera movement
     const forward = new THREE.Vector3(0,0,-1).applyEuler(camera.rotation);
     const right = new THREE.Vector3(1,0,0).applyEuler(camera.rotation);
-
     let mult = cam.baseSpeed;
     if (keys.shift) mult *= cam.boost;
-
     if (keys.w) cam.velocity.addScaledVector(forward, cam.accel*mult);
     if (keys.s) cam.velocity.addScaledVector(forward, -cam.accel*mult);
     if (keys.a) cam.velocity.addScaledVector(right, -cam.accel*mult);
     if (keys.d) cam.velocity.addScaledVector(right, cam.accel*mult);
-
     cam.velocity.multiplyScalar(cam.damping);
     camera.position.add(cam.velocity);
 
+    // Follow mode
     if (follow) {
         const t = follow.position.clone();
         const off = new THREE.Vector3(0, 140, -320).applyEuler(camera.rotation);
@@ -319,15 +318,18 @@ function animate() {
         cam.velocity.set(0,0,0);
     }
 
+    // Render scene to render target
+    renderer.setRenderTarget(rt);
     renderer.render(scene, camera);
+    renderer.setRenderTarget(null);
+
+    // Update shader uniforms
+    postMat.uniforms.time.value += 0.016;
+
+    // Render post-processing quad
+    renderer.render(postScene, postCam);
 }
 animate();
-
-postMat.uniforms.time.value += 0.016; // Animate shader over time if desired
-renderer.setRenderTarget(rt);
-renderer.render(scene, camera);
-renderer.setRenderTarget(null);
-renderer.render(postScene, postCam);
     
 addEventListener("resize", () => {
     renderer.setSize(innerWidth, innerHeight);
