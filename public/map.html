@@ -39,7 +39,6 @@
 <script type="module">
 import * as THREE from "three";
 import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
-import { OBJLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/OBJLoader.js";
 
 /* ======================
    SCENE
@@ -53,13 +52,14 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x050508);
 
 const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 20000);
-camera.position.set(2000,2000,2000);
+camera.position.set(0,1500,2000);
 
+/* Disable manual control */
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
+controls.enabled = false;
 
 /* ======================
-   LIGHT
+   LIGHTING
 ====================== */
 scene.add(new THREE.AmbientLight(0xffffff,0.35));
 const sun = new THREE.DirectionalLight(0xffffff,1.1);
@@ -90,12 +90,22 @@ function ui(t,l,r,b){
 }
 
 /* ======================
-   SOCKET
+   SOCKET + CHAT
 ====================== */
 const socket = io();
+const log = document.getElementById("log");
+const input = document.getElementById("input");
+
+input.addEventListener("keydown",e=>{
+	if(e.key==="Enter" && input.value){
+		socket.emit("chat:send", input.value);
+		input.value="";
+	}
+});
+
 socket.on("chat:msg",m=>{
-	log.innerHTML+=`<div><b>${m.from}:</b> ${m.msg}</div>`;
-	log.scrollTop=log.scrollHeight;
+	log.innerHTML += `<div><b>${m.from}:</b> ${m.msg}</div>`;
+	log.scrollTop = log.scrollHeight;
 });
 
 /* ======================
@@ -105,59 +115,82 @@ const group = new THREE.Group();
 scene.add(group);
 const players = new Map();
 
-function makePlayer(name){
-	const m=new THREE.Mesh(
+function makePlayer(){
+	const m = new THREE.Mesh(
 		new THREE.SphereGeometry(10,16,16),
 		new THREE.MeshStandardMaterial()
 	);
 
-	const arrow=new THREE.Mesh(
+	/* Look arrow */
+	const arrow = new THREE.Mesh(
 		new THREE.ConeGeometry(6,20,8),
-		new THREE.MeshStandardMaterial({color:0xffff00})
+		new THREE.MeshStandardMaterial({ color:0xffff00 })
 	);
-	arrow.rotation.x=Math.PI/2;
-	arrow.position.y=35;
+	arrow.rotation.x = Math.PI/2;
+	arrow.position.y = 35;
 	m.add(arrow);
 
-	m.userData={
-		pos:new THREE.Vector3(),
-		vel:new THREE.Vector3(),
-		target:new THREE.Vector3(),
-		arrowAngle:0,
-		arrowTarget:0
+	m.userData = {
+		pos: new THREE.Vector3(),
+		vel: new THREE.Vector3(),
+		lookAngle: 0,
+		lookTarget: 0
 	};
 
 	return m;
 }
 
 /* ======================
-   UPDATE
+   SPECTATE TARGET
+====================== */
+let spectating = null;
+
+/* Click to spectate */
+addEventListener("pointerdown",e=>{
+	const mouse = new THREE.Vector2(
+		(e.clientX/innerWidth)*2-1,
+		-(e.clientY/innerHeight)*2+1
+	);
+	const ray = new THREE.Raycaster();
+	ray.setFromCamera(mouse,camera);
+	const hit = ray.intersectObjects(group.children)[0];
+	if(hit) spectating = hit.object;
+});
+
+/* ======================
+   UPDATE FROM SERVER
 ====================== */
 async function updatePlayers(){
-	const data=await fetch("/map").then(r=>r.json());
-	tributeUI.innerHTML="<b>Tributes</b><br>"+data.map(p=>p.name).join("<br>");
+	const data = await fetch("/map").then(r=>r.json());
 
-	const alive=new Set();
+	tributeUI.innerHTML =
+		"<b>Tributes</b><br>" + data.map(p=>p.name).join("<br>");
+
+	const alive = new Set();
+
 	for(const p of data){
 		alive.add(p.id);
+
 		if(!players.has(p.id)){
-			const m=makePlayer(p.name);
+			const m = makePlayer();
 			group.add(m);
 			players.set(p.id,m);
 		}
-		const m=players.get(p.id);
-		const u=m.userData;
 
-		u.target.set(p.x,p.y,p.z);
-		u.vel.copy(u.target).sub(u.pos);
-		u.pos.copy(u.target);
+		const m = players.get(p.id);
+		const u = m.userData;
 
-		if(p.health>66) m.material.color.set(0x00ff00);
-		else if(p.health>33) m.material.color.set(0xffaa00);
+		u.vel.set(p.x,p.y,p.z).sub(u.pos);
+		u.pos.set(p.x,p.y,p.z);
+
+		/* Health color */
+		if(p.health > 66) m.material.color.set(0x00ff00);
+		else if(p.health > 33) m.material.color.set(0xffaa00);
 		else m.material.color.set(0xff0000);
 
-		if(p.lookX!==undefined){
-			u.arrowTarget=-Math.atan2(p.lookX,p.lookZ);
+		/* Look prediction */
+		if(p.lookX !== undefined){
+			u.lookTarget = -Math.atan2(p.lookX, p.lookZ);
 		}
 	}
 
@@ -165,74 +198,49 @@ async function updatePlayers(){
 		if(!alive.has(id)){
 			group.remove(m);
 			players.delete(id);
+			if(m === spectating) spectating = null;
 		}
 	}
 }
 setInterval(updatePlayers,200);
 
 /* ======================
-   CAMERA MODES
-====================== */
-let followed=null;
-let mode="free";
-
-addEventListener("pointerdown",e=>{
-	const ray=new THREE.Raycaster();
-	const mouse=new THREE.Vector2(
-		(e.clientX/innerWidth)*2-1,
-		-(e.clientY/innerHeight)*2+1
-	);
-	ray.setFromCamera(mouse,camera);
-	const hit=ray.intersectObjects(group.children)[0];
-	if(hit){
-		followed=hit.object;
-		mode="follow";
-		controls.enabled=false;
-	}
-});
-
-addEventListener("keydown",e=>{
-	if(e.key==="f"){ mode="free"; followed=null; controls.enabled=true }
-	if(e.key==="1"&&followed) mode="follow";
-	if(e.key==="2"&&followed) mode="fp";
-});
-
-/* ======================
-   LOOP
+   LOOP (AUTO FOLLOW)
 ====================== */
 function animate(){
 	requestAnimationFrame(animate);
 
 	for(const m of group.children){
-		const u=m.userData;
+		const u = m.userData;
 		m.position.lerp(u.pos,0.15);
-		u.arrowAngle=THREE.MathUtils.lerp(u.arrowAngle,u.arrowTarget,0.2);
-		m.children[0].rotation.y=u.arrowAngle;
+		u.lookAngle = THREE.MathUtils.lerp(u.lookAngle,u.lookTarget,0.25);
+		m.children[0].rotation.y = u.lookAngle;
 	}
 
-	if(mode==="follow"&&followed){
-		camera.position.lerp(followed.position.clone().add(new THREE.Vector3(0,400,700)),0.06);
-		camera.lookAt(followed.position);
+	/* Automatic first-person spectate */
+	if(spectating){
+		const u = spectating.userData;
+
+		const eye = spectating.position.clone().add(new THREE.Vector3(0,80,0));
+		camera.position.lerp(eye,0.35);
+
+		const quat = new THREE.Quaternion()
+			.setFromAxisAngle(new THREE.Vector3(0,1,0), u.lookAngle);
+
+		camera.quaternion.slerp(quat,0.35);
 	}
 
-	if(mode==="fp"&&followed){
-		const u=followed.userData;
-		camera.position.lerp(followed.position.clone().add(new THREE.Vector3(0,80,0)),0.35);
-		camera.quaternion.slerp(
-			new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),u.arrowAngle),
-			0.35
-		);
-	}
-
-	controls.update();
 	renderer.render(scene,camera);
 }
 animate();
 
+/* ======================
+   RESIZE
+====================== */
 addEventListener("resize",()=>{
-	camera.aspect=innerWidth/innerHeight;
+	camera.aspect = innerWidth/innerHeight;
 	camera.updateProjectionMatrix();
-	renderer.setSize(innerWidth,innerHeight);
+	renderer.setSize(innerWidth, innerHeight);
 });
 </script>
 </body>
