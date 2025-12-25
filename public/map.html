@@ -40,6 +40,18 @@
 <script type="module">
 import * as THREE from "three";
 import { OBJLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/OBJLoader.js";
+import {
+	acceleratedRaycast,
+	computeBoundsTree,
+	disposeBoundsTree
+} from "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.7.4/build/index.module.js";
+
+/* ======================
+   BVH PATCH
+====================== */
+THREE.Mesh.prototype.raycast = acceleratedRaycast;
+THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 
 /* ======================
    RENDERER / SCENE
@@ -105,7 +117,7 @@ socket.on("chat:msg",m=>{
 });
 
 /* ======================
-   ARENA (MAP)
+   ARENA (BVH)
 ====================== */
 let arena = null;
 const arenaMeshes = [];
@@ -115,16 +127,18 @@ loader.load("/arena.obj", obj => {
 
 	obj.traverse(c=>{
 		if(c.isMesh){
+			c.geometry.computeVertexNormals();
+			c.geometry.computeBoundsTree(); // BVH BUILD
+
 			c.material = new THREE.MeshStandardMaterial({
 				color:0x888888,
 				roughness:0.9
 			});
-			c.geometry.computeVertexNormals();
+
 			arenaMeshes.push(c);
 		}
 	});
 
-	// center arena
 	const box = new THREE.Box3().setFromObject(obj);
 	const center = box.getCenter(new THREE.Vector3());
 	obj.position.sub(center);
@@ -132,8 +146,6 @@ loader.load("/arena.obj", obj => {
 	obj.scale.set(1,1,1);
 	scene.add(obj);
 	arena = obj;
-
-	console.log("Arena loaded");
 });
 
 /* ======================
@@ -190,7 +202,6 @@ async function updatePlayers(){
 	const data = await fetch("/map").then(r=>r.json());
 
 	tributeUI.innerHTML = "<b>Tributes</b><br>";
-
 	const alive = new Set();
 
 	for(const p of data){
@@ -205,9 +216,8 @@ async function updatePlayers(){
 		const m = players.get(p.id);
 		const u = m.userData;
 
-		// FULL XYZ SUPPORT
-		u.vel.set(p.x, p.y, p.z).sub(u.pos);
-		u.pos.set(p.x, p.y, p.z);
+		u.vel.set(p.x,p.y,p.z).sub(u.pos);
+		u.pos.set(p.x,p.y,p.z);
 
 		if(p.health > 66) m.material.color.set(0x00ff00);
 		else if(p.health > 33) m.material.color.set(0xffaa00);
@@ -235,7 +245,7 @@ async function updatePlayers(){
 setInterval(updatePlayers,200);
 
 /* ======================
-   CAMERA COLLISION
+   CAMERA COLLISION (BVH)
 ====================== */
 const camRay = new THREE.Raycaster();
 const camDir = new THREE.Vector3();
@@ -265,7 +275,6 @@ function animate(){
 
 		camTarget.copy(spectating.position).add(desiredOffset);
 
-		// CAMERA COLLISION AGAINST MAP
 		if(arenaMeshes.length){
 			camDir.subVectors(camTarget, spectating.position).normalize();
 			camRay.set(spectating.position, camDir);
