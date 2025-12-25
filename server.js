@@ -24,13 +24,19 @@ if (!SESSION_TOKEN) {
 ====================== */
 const app = express();
 app.use(express.json({ limit: "1mb" }));
-app.use(express.static(path.join(__dirname, "public")));
+
+// ✅ STATIC FILES (arena.obj lives here)
+const PUBLIC_DIR = path.join(__dirname, "public");
+app.use(express.static(PUBLIC_DIR));
 
 /* ======================
    HTTP + WS
 ====================== */
 const httpServer = createServer(app);
-const io = new Server(httpServer, { cors: { origin: "*" } });
+const io = new Server(httpServer, {
+	cors: { origin: "*" },
+	maxHttpBufferSize: 1e6
+});
 
 /* ======================
    SECURITY
@@ -39,9 +45,10 @@ let lastNonce = 0;
 let times = [];
 
 function verify(req) {
-	const { token, nonce, timestamp } = req.body;
+	const { token, nonce, timestamp } = req.body ?? {};
+
 	if (token !== SESSION_TOKEN) return false;
-	if (nonce <= lastNonce) return false;
+	if (typeof nonce !== "number" || nonce <= lastNonce) return false;
 	if (Math.abs(Date.now() / 1000 - timestamp) > 10) return false;
 
 	lastNonce = nonce;
@@ -59,15 +66,22 @@ let killFeed = [];
 const MAX_KILLS = 20;
 
 /* ======================
-   MAP
+   MAP (PLAYER STATE)
 ====================== */
 app.post("/map", (req, res) => {
 	if (!verify(req)) return res.sendStatus(403);
-	players = req.body.players || [];
+
+	if (!Array.isArray(req.body.players)) {
+		return res.sendStatus(400);
+	}
+
+	players = req.body.players;
 	res.sendStatus(200);
 });
 
-app.get("/map", (_, res) => res.json(players));
+app.get("/map", (_, res) => {
+	res.json(players);
+});
 
 /* ======================
    LIGHTING
@@ -78,13 +92,16 @@ app.post("/lighting", (req, res) => {
 	res.sendStatus(200);
 });
 
-app.get("/lighting", (_, res) => res.json(lighting));
+app.get("/lighting", (_, res) => {
+	res.json(lighting);
+});
 
 /* ======================
    KILL FEED
 ====================== */
 app.post("/kill", (req, res) => {
 	if (!verify(req)) return res.sendStatus(403);
+
 	const { killer, victim } = req.body;
 	if (!killer || !victim) return res.sendStatus(400);
 
@@ -95,7 +112,9 @@ app.post("/kill", (req, res) => {
 	res.sendStatus(200);
 });
 
-app.get("/kills", (_, res) => res.json(killFeed));
+app.get("/kills", (_, res) => {
+	res.json(killFeed);
+});
 
 /* ======================
    SPECTATORS + CHAT
@@ -103,8 +122,9 @@ app.get("/kills", (_, res) => res.json(killFeed));
 io.on("connection", socket => {
 	socket.on("chat:send", msg => {
 		if (typeof msg !== "string" || msg.length > 120) return;
+
 		io.emit("chat:msg", {
-			from: `Spectator`,
+			from: "Spectator",
 			msg,
 			time: Date.now()
 		});
@@ -115,5 +135,6 @@ io.on("connection", socket => {
    START
 ====================== */
 httpServer.listen(PORT, () => {
-	console.log(`🚀 HG Relay running on ${PORT}`);
+	console.log(`🚀 HG Relay running on http://localhost:${PORT}`);
+	console.log(`📦 Serving static files from /public`);
 });
