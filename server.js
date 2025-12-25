@@ -1,148 +1,54 @@
 import express from "express";
+import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
-import {
-	Client,
-	GatewayIntentBits,
-	Events,
-	REST,
-	Routes
-} from "discord.js";
-
-/* ======================
-   PATH FIX (ESM)
-====================== */
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/* ======================
-   ENV
-====================== */
-
-const {
-	SECRET,
-	DISCORD_TOKEN,
-	CLIENT_ID,
-	GUILD_ID,
-	PORT = 10000
-} = process.env;
-
+const { SECRET, PORT = 10000 } = process.env;
 if (!SECRET) throw new Error("SECRET missing");
-if (!DISCORD_TOKEN) throw new Error("DISCORD_TOKEN missing");
-if (!CLIENT_ID) throw new Error("CLIENT_ID missing");
-
-/* ======================
-   EXPRESS
-====================== */
 
 const app = express();
-
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
-/* ======================
-   LIVE STATE
-====================== */
-
-let liveMapState = [];
-let lightingState = {
+let players = [];
+let lighting = {
 	clockTime: 12,
 	brightness: 2,
 	fogColor: [5, 9, 20],
-	fogDensity: 0.00035
+	fogDensity: 0.00035,
+	haze: 0,
+	sunDirection: [0, 1, 0]
 };
 
-/* ======================
-   MAP ENDPOINTS
-====================== */
+function verify(req, payload) {
+	const { timestamp, signature } = req.body;
+	if (!timestamp || !signature) return false;
+	if (Math.abs(Date.now() / 1000 - timestamp) > 10) return false;
 
-app.post("/map", (req, res) => {
-	if (req.body.secret !== SECRET) return res.sendStatus(403);
-
-	liveMapState = Array.isArray(req.body.players)
-		? req.body.players
-		: [];
-
-	res.sendStatus(200);
-});
-
-app.get("/map", (req, res) => {
-	res.json(liveMapState);
-});
-
-/* ======================
-   LIGHTING ENDPOINTS
-====================== */
-
-app.post("/lighting", (req, res) => {
-	if (req.body.secret !== SECRET) return res.sendStatus(403);
-
-	if (req.body.lighting) {
-		lightingState = {
-			...lightingState,
-			...req.body.lighting
-		};
-	}
-
-	res.sendStatus(200);
-});
-
-app.get("/lighting", (req, res) => {
-	res.json(lightingState);
-});
-
-/* ======================
-   DISCORD BOT
-====================== */
-
-const client = new Client({
-	intents: [GatewayIntentBits.Guilds]
-});
-
-const commands = [
-	{
-		name: "map",
-		description: "View live arena map"
-	}
-];
-
-async function registerCommands() {
-	const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
-
-	await rest.put(
-		GUILD_ID
-			? Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID)
-			: Routes.applicationCommands(CLIENT_ID),
-		{ body: commands }
-	);
+	const raw = JSON.stringify(payload) + ":" + timestamp + ":" + SECRET;
+	const hash = crypto.createHash("sha256").update(raw).digest("hex");
+	return hash === signature;
 }
 
-client.once(Events.ClientReady, async bot => {
-	console.log(`🤖 Logged in as ${bot.user.tag}`);
-	await registerCommands();
+app.post("/map", (req, res) => {
+	if (!verify(req, { players: req.body.players })) return res.sendStatus(403);
+	players = req.body.players || [];
+	res.sendStatus(200);
 });
 
-client.on(Events.InteractionCreate, async interaction => {
-	if (!interaction.isChatInputCommand()) return;
+app.get("/map", (_, res) => res.json(players));
 
-	if (interaction.commandName === "map") {
-		await interaction.reply({
-			embeds: [{
-				title: "🗺️ Live Arena Map",
-				description: "[Open 3D Map](https://hg-relay.onrender.com/map.html)",
-				color: 0x00b3ff
-			}]
-		});
-	}
+app.post("/lighting", (req, res) => {
+	if (!verify(req, { lighting: req.body.lighting })) return res.sendStatus(403);
+	lighting = { ...lighting, ...req.body.lighting };
+	res.sendStatus(200);
 });
 
-/* ======================
-   START
-====================== */
-
-await client.login(DISCORD_TOKEN);
+app.get("/lighting", (_, res) => res.json(lighting));
 
 app.listen(PORT, () => {
-	console.log(`🚀 HG Relay running on port ${PORT}`);
+	console.log("🚀 Secure HG Relay running");
 });
