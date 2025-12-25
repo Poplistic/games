@@ -6,24 +6,61 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
-body { margin:0; overflow:hidden; background:#02040a; }
+body {
+	margin:0;
+	overflow:hidden;
+	background:#080000;
+}
 canvas { display:block }
 
+/* ================= RED UI ================= */
 .ui {
 	position:absolute;
-	color:#aefcff;
+	color:#ffd6d6;
 	font-family:system-ui,sans-serif;
-	background:linear-gradient(180deg,rgba(0,255,255,.18),rgba(0,60,60,.05));
-	backdrop-filter:blur(12px) saturate(150%);
-	border:1px solid rgba(0,255,255,.4);
+	background:linear-gradient(180deg,rgba(255,60,60,.22),rgba(80,0,0,.1));
+	backdrop-filter:blur(10px);
+	border:1px solid rgba(255,80,80,.45);
 	border-radius:12px;
 	padding:10px;
 	font-size:12px;
-	box-shadow:0 0 25px rgba(0,255,255,.35), inset 0 0 30px rgba(0,255,255,.1);
+	box-shadow:
+		0 0 20px rgba(255,60,60,.35),
+		inset 0 0 18px rgba(255,60,60,.15);
 }
 
-.name { cursor:pointer; padding:4px 6px; border-radius:6px }
-.name:hover { background:rgba(0,255,255,.18) }
+.ui b {
+	color:#fff;
+}
+
+.name {
+	cursor:pointer;
+	padding:4px 6px;
+	margin-top:2px;
+	border-radius:6px;
+	transition:background .15s, box-shadow .15s;
+}
+.name:hover {
+	background:rgba(255,80,80,.25);
+	box-shadow:0 0 10px rgba(255,80,80,.6);
+}
+
+a {
+	color:#ffd6d6;
+	text-decoration:none;
+}
+
+/* Button */
+.link {
+	position:absolute;
+	top:12px;
+	right:12px;
+	padding:10px 16px;
+	border-radius:10px;
+	background:linear-gradient(180deg,rgba(255,60,60,.28),rgba(80,0,0,.15));
+	border:1px solid rgba(255,80,80,.5);
+	box-shadow:0 0 18px rgba(255,60,60,.45);
+}
 </style>
 
 <script type="importmap">
@@ -37,13 +74,7 @@ canvas { display:block }
 
 <body>
 
-<a href="/fallen.html" target="_blank"
-style="position:absolute;top:12px;right:12px;color:#aefcff;
-background:linear-gradient(180deg,rgba(0,255,255,.25),rgba(0,80,80,.1));
-border:1px solid rgba(0,255,255,.5);
-padding:10px 16px;border-radius:10px;text-decoration:none;">
-Fallen Tributes
-</a>
+<a href="/fallen.html" target="_blank" class="link">Fallen Tributes</a>
 
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
@@ -56,7 +87,7 @@ import {
 	disposeBoundsTree
 } from "https://cdn.jsdelivr.net/npm/three-mesh-bvh@0.7.4/build/index.module.js";
 
-/* ================= BVH PATCH ================= */
+/* ================= BVH ================= */
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
 THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
@@ -70,32 +101,33 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x02040a);
+scene.background = new THREE.Color(0x080000);
 
 const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 30000);
 camera.position.set(0,1200,1800);
 
 /* ================= LIGHT ================= */
 scene.add(new THREE.AmbientLight(0xffffff,0.35));
-const sun = new THREE.DirectionalLight(0xffffff,1.1);
+const sun = new THREE.DirectionalLight(0xffffff,1.2);
 sun.position.set(3000,6000,2000);
 scene.add(sun);
 
 /* ================= UI ================= */
-const tributeUI = ui("10px","10px");
-function ui(t,l){
+const tributeUI = createUI("10px","10px");
+function createUI(t,l){
 	const d=document.createElement("div");
 	d.className="ui";
-	d.style.top=t; d.style.left=l;
+	d.style.top=t;
+	d.style.left=l;
 	document.body.appendChild(d);
 	return d;
 }
 
-/* ================= CAMERA STATE ================= */
+/* ================= CAMERA ================= */
 const cam = {
 	vel:new THREE.Vector3(),
 	accel:2600,
-	damping:10,
+	damping:9,
 	max:1800,
 	yaw:0,
 	pitch:0,
@@ -123,39 +155,24 @@ renderer.domElement.addEventListener("mousedown",e=>{
 });
 addEventListener("mousemove",e=>{
 	if(document.pointerLockElement){
-		cam.yaw-=e.movementX*0.002;
-		cam.pitch=Math.max(-1.5,Math.min(1.5,cam.pitch-e.movementY*0.002));
+		cam.yaw -= e.movementX * 0.002;
+		cam.pitch = Math.max(-1.5, Math.min(1.5, cam.pitch - e.movementY * 0.002));
 	}
 });
 addEventListener("contextmenu",e=>e.preventDefault());
 
-/* ================= SHADER (OPAQUE) ================= */
-const holoMat = new THREE.ShaderMaterial({
-	vertexShader:`
-	varying vec3 vPos;
-	void main(){
-		vPos=position;
-		gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);
-	}`,
-	fragmentShader:`
-	uniform float iTime;
-	varying vec3 vPos;
-	void main(){
-		float scan=sin(vPos.y*0.12+iTime*6.)*0.08;
-		gl_FragColor=vec4(0.,.8,1.,1.);
-	}`,
-	uniforms:{ iTime:{value:0} },
-	depthWrite:true
-});
-
-/* ================= ARENA ================= */
+/* ================= ARENA (SOLID) ================= */
 const arenaMeshes=[];
 new OBJLoader().load("/arena.obj",obj=>{
 	obj.traverse(c=>{
 		if(c.isMesh){
 			c.geometry.computeVertexNormals();
 			c.geometry.computeBoundsTree();
-			c.material=holoMat;
+			c.material = new THREE.MeshStandardMaterial({
+				color:0x3a0a0a,
+				roughness:0.9,
+				metalness:0.05
+			});
 			arenaMeshes.push(c);
 		}
 	});
@@ -169,8 +186,11 @@ const players=new Map();
 
 function makePlayer(){
 	return new THREE.Mesh(
-		new THREE.SphereGeometry(10,32,32),
-		new THREE.MeshStandardMaterial({ color:0x00ccff })
+		new THREE.SphereGeometry(10,24,24),
+		new THREE.MeshStandardMaterial({
+			color:0xff4444,
+			emissive:0x220000
+		})
 	);
 }
 
@@ -195,6 +215,7 @@ async function updatePlayers(){
 		d.onclick=()=>cam.follow=m;
 		tributeUI.appendChild(d);
 	}
+
 	for(const [id,m] of players){
 		if(!alive.has(id)){
 			group.remove(m);
@@ -211,7 +232,7 @@ function collide(pos){
 		ray.set(pos,new THREE.Vector3(0,-1,0));
 		const hit=ray.intersectObject(m);
 		if(hit.length && hit[0].distance<30){
-			pos.y+=30-hit[0].distance;
+			pos.y += 30 - hit[0].distance;
 		}
 	}
 }
@@ -220,7 +241,8 @@ function collide(pos){
 let last=performance.now();
 function animate(){
 	requestAnimationFrame(animate);
-	const dt=(performance.now()-last)/1000; last=performance.now();
+	const dt=(performance.now()-last)/1000;
+	last=performance.now();
 
 	camera.rotation.order="YXZ";
 	camera.rotation.y=cam.yaw;
@@ -228,8 +250,8 @@ function animate(){
 
 	if(cam.follow){
 		const target=cam.follow.position.clone();
-		const offset=new THREE.Vector3(0,120,-280).applyEuler(camera.rotation);
-		camera.position.lerp(target.clone().add(offset),0.08);
+		const offset=new THREE.Vector3(0,140,-320).applyEuler(camera.rotation);
+		camera.position.lerp(target.add(offset),0.08);
 	}else{
 		const dir=new THREE.Vector3();
 		camera.getWorldDirection(dir);
@@ -249,12 +271,6 @@ function animate(){
 	}
 
 	collide(camera.position);
-
-	scene.traverse(o=>{
-		if(o.material?.uniforms?.iTime)
-			o.material.uniforms.iTime.value+=dt;
-	});
-
 	renderer.render(scene,camera);
 }
 animate();
