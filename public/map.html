@@ -1,274 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>HG Live Map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<style>
+	body { margin: 0; overflow: hidden; background: #000; }
+	.label {
+		position: absolute;
+		color: white;
+		font-family: sans-serif;
+		font-size: 12px;
+		pointer-events: none;
+		text-shadow: 0 0 4px black;
+	}
+</style>
+</head>
+
+<body>
+
+<!-- Socket.IO -->
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
 <script type="module">
+/* ======================
+   THREE IMPORTS (FIXED)
+====================== */
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
 import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
-import { CSS2DRenderer, CSS2DObject } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/renderers/CSS2DRenderer.js";
 import { Sky } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/objects/Sky.js";
 
 /* ======================
-   CONFIG
+   BASIC SETUP
 ====================== */
-
-const DOT_RADIUS = 5;
-const HITBOX_RADIUS = 40;
-const PREDICTION_TIME = 0.15;
-const GROUND_RAY_HEIGHT = 500;
-const GROUND_OFFSET = 8;
-
-/* ======================
-   RENDERERS
-====================== */
-
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(devicePixelRatio);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
-const labelRenderer = new CSS2DRenderer();
-labelRenderer.setSize(innerWidth, innerHeight);
-labelRenderer.domElement.style.position = "absolute";
-labelRenderer.domElement.style.top = "0";
-labelRenderer.domElement.style.pointerEvents = "none";
-document.body.appendChild(labelRenderer.domElement);
-
-/* ======================
-   SCENE / CAMERA
-====================== */
-
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 20000);
-camera.position.set(2000, 1600, 2000);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 15000);
+camera.position.set(2000, 1800, 2000);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
 /* ======================
-   SKY / LIGHTS
+   SKY + LIGHT
 ====================== */
-
 const sky = new Sky();
 sky.scale.setScalar(10000);
 scene.add(sky);
 
 const sun = new THREE.Vector3();
-sky.material.uniforms.turbidity.value = 10;
-sky.material.uniforms.rayleigh.value = 2;
+scene.add(new THREE.AmbientLight(0x404060, 0.4));
 
 const dirLight = new THREE.DirectionalLight(0xffffff, 3);
 scene.add(dirLight);
-scene.add(new THREE.AmbientLight(0x404060, 0.4));
 
 /* ======================
-   KILL FEED UI
+   GROUPS
 ====================== */
+const playerGroup = new THREE.Group();
+const spectatorGroup = new THREE.Group();
+scene.add(playerGroup, spectatorGroup);
 
-const killFeed = document.createElement("div");
-killFeed.style.position = "absolute";
-killFeed.style.left = "10px";
-killFeed.style.bottom = "10px";
-killFeed.style.fontFamily = "sans-serif";
-killFeed.style.color = "white";
-killFeed.style.pointerEvents = "none";
-document.body.appendChild(killFeed);
+/* ======================
+   STATE
+====================== */
+const playerSprites = new Map();
+const spectatorMeshes = new Map();
+let trackedPlayerId = null;
 
-function addKillFeed(text) {
-	const row = document.createElement("div");
-	row.textContent = text;
-	row.style.background = "rgba(0,0,0,0.6)";
-	row.style.padding = "6px 10px";
-	row.style.marginTop = "6px";
-	row.style.borderRadius = "6px";
-	row.style.animation = "fadeout 6s forwards";
-
-	killFeed.appendChild(row);
-	setTimeout(() => row.remove(), 6000);
+/* ======================
+   HELPERS
+====================== */
+function lerp(a, b, t) {
+	return a + (b - a) * t;
 }
 
-const style = document.createElement("style");
-style.textContent = `
-@keyframes fadeout {
-	0% { opacity: 1 }
-	70% { opacity: 1 }
-	100% { opacity: 0 }
-}`;
-document.head.appendChild(style);
+function smoothVec(v, target, t) {
+	v.x = lerp(v.x, target.x, t);
+	v.y = lerp(v.y, target.y, t);
+	v.z = lerp(v.z, target.z, t);
+}
 
 /* ======================
-   PLAYER MARKERS
+   PLAYER DOT (SMALL + CLICKABLE)
 ====================== */
-
-const playerGroup = new THREE.Group();
-scene.add(playerGroup);
-
-function makeMarker(name) {
-	const g = new THREE.Group();
-
+function makePlayerDot() {
 	const dot = new THREE.Mesh(
-		new THREE.SphereGeometry(DOT_RADIUS, 16, 16),
+		new THREE.SphereGeometry(8, 12, 12),
 		new THREE.MeshBasicMaterial({ color: 0x00ff00 })
 	);
-	g.add(dot);
 
+	// Invisible big hitbox (mobile friendly)
 	const hitbox = new THREE.Mesh(
-		new THREE.SphereGeometry(HITBOX_RADIUS),
+		new THREE.SphereGeometry(40, 8, 8),
 		new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 })
 	);
-	g.add(hitbox);
 
-	const div = document.createElement("div");
-	div.style.color = "#0ff";
-	div.style.fontWeight = "bold";
-	div.style.textShadow = "0 0 4px black";
-	const label = new CSS2DObject(div);
-	label.position.set(0, 25, 0);
-	label.visible = false;
-	g.add(label);
-
-	g.userData = {
-		name,
-		dot,
-		hitbox,
-		label,
-		lastPos: null,
-		lastTime: 0,
-		velocity: new THREE.Vector3()
-	};
-
-	return g;
+	dot.add(hitbox);
+	dot.userData.hitbox = hitbox;
+	return dot;
 }
 
-const markers = new Map();
-let tracked = null;
-
 /* ======================
-   GROUND RAYCAST
+   PLAYER LABEL
 ====================== */
-
-const groundRay = new THREE.Raycaster();
-const down = new THREE.Vector3(0, -1, 0);
-
-function snapToGround(pos) {
-	groundRay.set(
-		new THREE.Vector3(pos.x, GROUND_RAY_HEIGHT, pos.z),
-		down
-	);
-
-	const grounds = [];
-	scene.traverse(o => {
-		if (o.isMesh && o.userData.isGround) grounds.push(o);
-	});
-
-	if (!grounds.length) return pos;
-
-	const hits = groundRay.intersectObjects(grounds, true);
-	if (hits.length) {
-		pos.y = hits[0].point.y + GROUND_OFFSET;
-	}
-	return pos;
+function makeLabel() {
+	const el = document.createElement("div");
+	el.className = "label";
+	document.body.appendChild(el);
+	return el;
 }
 
 /* ======================
    UPDATE PLAYERS
 ====================== */
-
-function updatePlayers(data) {
-	const seen = new Set();
+async function updatePlayers() {
+	const data = await fetch("/map").then(r => r.json());
 
 	for (const p of data) {
-		seen.add(p.id);
-
-		if (!markers.has(p.id)) {
-			const m = makeMarker(p.name);
-			playerGroup.add(m);
-			markers.set(p.id, m);
+		if (!playerSprites.has(p.id)) {
+			const mesh = makePlayerDot();
+			mesh.userData.id = p.id;
+			mesh.userData.label = makeLabel();
+			playerGroup.add(mesh);
+			playerSprites.set(p.id, mesh);
 		}
 
-		const m = markers.get(p.id);
-		const now = performance.now() / 1000;
-		const pos = new THREE.Vector3(p.x, 0, p.z);
+		const m = playerSprites.get(p.id);
+		smoothVec(m.position, { x: p.x, y: 50, z: p.z }, 0.35);
 
-		if (m.userData.lastPos) {
-			const dt = Math.max(now - m.userData.lastTime, 0.016);
-			m.userData.velocity.copy(pos).sub(m.userData.lastPos).divideScalar(dt);
-		}
-
-		m.userData.lastPos = pos.clone();
-		m.userData.lastTime = now;
-
-		const predicted = pos.clone().add(
-			m.userData.velocity.clone().multiplyScalar(PREDICTION_TIME)
-		);
-
-		m.position.lerp(snapToGround(predicted), 0.5);
-	}
-
-	// Detect deaths
-	for (const [id, m] of markers) {
-		if (!seen.has(id)) {
-			addKillFeed(`${m.userData.name} eliminated`);
-			playerGroup.remove(m);
-			markers.delete(id);
-			if (tracked === m) tracked = null;
-		}
+		const dist = camera.position.distanceTo(m.position).toFixed(0);
+		m.userData.label.innerText = `${p.name} • ${dist}m`;
 	}
 }
 
 /* ======================
-   FETCH LOOP
+   CLICK TO TRACK PLAYER
 ====================== */
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
 
-setInterval(async () => {
-	updatePlayers(await fetch("/map").then(r => r.json()));
-}, 200);
+function onClick(e) {
+	mouse.x = (e.clientX / innerWidth) * 2 - 1;
+	mouse.y = -(e.clientY / innerHeight) * 2 + 1;
+
+	raycaster.setFromCamera(mouse, camera);
+	const hits = raycaster.intersectObjects(playerGroup.children, true);
+
+	if (hits.length) {
+		trackedPlayerId = hits[0].object.parent.userData.id;
+	}
+}
+
+window.addEventListener("pointerdown", onClick);
 
 /* ======================
-   PICKING
+   AUTO FOLLOW CAM
 ====================== */
+function followPlayer() {
+	if (!trackedPlayerId) return;
+	const m = playerSprites.get(trackedPlayerId);
+	if (!m) return;
 
-const raycaster = new THREE.Raycaster();
-const pointer = new THREE.Vector2();
+	const offset = new THREE.Vector3(0, 600, 800);
+	const targetPos = m.position.clone().add(offset);
 
-renderer.domElement.addEventListener("click", e => {
-	const rect = renderer.domElement.getBoundingClientRect();
-	pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-	pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+	smoothVec(camera.position, targetPos, 0.08);
+	camera.lookAt(m.position);
+}
 
-	raycaster.setFromCamera(pointer, camera);
-	const hitboxes = [...markers.values()].map(m => m.userData.hitbox);
-	const hits = raycaster.intersectObjects(hitboxes);
-	tracked = hits.length ? hits[0].object.parent : null;
+/* ======================
+   SPECTATORS (SOCKET.IO)
+====================== */
+const socket = io();
+
+socket.on("spectators:init", list => {
+	list.forEach(addSpectator);
 });
+
+socket.on("spectator:join", addSpectator);
+socket.on("spectator:update", updateSpectator);
+socket.on("spectator:leave", id => {
+	const m = spectatorMeshes.get(id);
+	if (m) {
+		spectatorGroup.remove(m);
+		spectatorMeshes.delete(id);
+	}
+});
+
+function addSpectator(s) {
+	if (spectatorMeshes.has(s.id)) return;
+
+	const mesh = new THREE.Mesh(
+		new THREE.SphereGeometry(12, 12, 12),
+		new THREE.MeshBasicMaterial({ color: s.color })
+	);
+
+	spectatorGroup.add(mesh);
+	spectatorMeshes.set(s.id, mesh);
+}
+
+function updateSpectator(s) {
+	const m = spectatorMeshes.get(s.id);
+	if (!m) return;
+	m.position.set(s.pos.x, s.pos.y, s.pos.z);
+}
+
+/* Send our camera */
+setInterval(() => {
+	const dir = new THREE.Vector3();
+	camera.getWorldDirection(dir);
+
+	socket.emit("spectator:update", {
+		pos: camera.position,
+		dir
+	});
+}, 120);
 
 /* ======================
    ANIMATE
 ====================== */
-
-function animate() {
+async function animate() {
 	requestAnimationFrame(animate);
 
-	markers.forEach(m => {
-		const sel = m === tracked;
-		m.userData.dot.material.color.set(sel ? 0x00ffff : 0x00ff00);
-		m.userData.label.visible = sel;
+	await updatePlayers();
+	followPlayer();
 
-		if (sel) {
-			const dist = camera.position.distanceTo(m.position);
-			m.userData.label.element.textContent =
-				`${m.userData.name} (${Math.floor(dist)} studs)`;
-		}
-	});
-
-	if (tracked) {
-		camera.position.lerp(
-			tracked.position.clone().add(new THREE.Vector3(0, 900, 900)),
-			0.05
-		);
-		controls.target.lerp(tracked.position, 0.1);
+	for (const m of playerSprites.values()) {
+		const p = m.position.clone().project(camera);
+		const x = (p.x * 0.5 + 0.5) * innerWidth;
+		const y = (-p.y * 0.5 + 0.5) * innerHeight;
+		m.userData.label.style.transform = `translate(${x}px,${y}px)`;
 	}
 
 	controls.update();
 	renderer.render(scene, camera);
-	labelRenderer.render(scene, camera);
 }
 
 animate();
 </script>
+</body>
+</html>
