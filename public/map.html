@@ -31,9 +31,6 @@
 		border-radius:4px;
 		padding:4px;
 	}
-
-	#log div { transition:opacity 1.2s ease }
-	#log.fade div { opacity:0 }
 </style>
 
 <script type="importmap">
@@ -59,12 +56,10 @@ import { OBJLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/j
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(devicePixelRatio);
-renderer.shadowMap.enabled = true;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x050508);
-scene.fog = new THREE.FogExp2(0x050508, 0.000045);
 
 const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 20000);
 camera.position.set(2000,2000,2000);
@@ -78,7 +73,6 @@ controls.enableDamping = true;
 scene.add(new THREE.AmbientLight(0xffffff, 0.35));
 const sun = new THREE.DirectionalLight(0xffffff, 1.1);
 sun.position.set(3000,6000,2000);
-sun.castShadow = true;
 scene.add(sun);
 
 /* ======================
@@ -92,88 +86,9 @@ scene.add(playerGroup);
 ====================== */
 let terrainMesh = null;
 new OBJLoader().load("arena.obj", obj=>{
-	obj.traverse(m=>{
-		if(m.isMesh){
-			m.castShadow = true;
-			m.receiveShadow = true;
-		}
-	});
 	scene.add(obj);
 	terrainMesh = obj;
 });
-
-/* ======================
-   UI
-====================== */
-function ui(t,l,r,b){
-	const d=document.createElement("div");
-	d.className="ui";
-	if(t)d.style.top=t;
-	if(l)d.style.left=l;
-	if(r)d.style.right=r;
-	if(b)d.style.bottom=b;
-	document.body.appendChild(d);
-	return d;
-}
-
-const tributeUI = ui("10px","10px");
-const chatUI = ui(null,"10px",null,"10px");
-
-chatUI.innerHTML = `
-	<div id="log" style="height:120px;overflow:auto;margin-bottom:6px"></div>
-	<input id="input" placeholder="chat">
-`;
-
-/* ======================
-   CHAT
-====================== */
-const socket = io();
-let lastChatTime = 0;
-let chatFadeTimer = null;
-
-function resetChatFade(){
-	const log = document.getElementById("log");
-	log.classList.remove("fade");
-	clearTimeout(chatFadeTimer);
-	chatFadeTimer = setTimeout(()=>log.classList.add("fade"),8000);
-}
-
-document.getElementById("input").addEventListener("keydown",e=>{
-	if(e.key!=="Enter"||!e.target.value) return;
-	const now = performance.now();
-	if(now-lastChatTime < 1200) return;
-	lastChatTime = now;
-	socket.emit("chat:send", e.target.value);
-	e.target.value="";
-	resetChatFade();
-});
-
-socket.on("chat:msg",m=>{
-	const log = document.getElementById("log");
-	log.innerHTML += `<div><b>${m.from}:</b> ${m.msg}</div>`;
-	log.scrollTop = log.scrollHeight;
-	resetChatFade();
-});
-
-/* ======================
-   NAME TAG
-====================== */
-function makeTextSprite(text){
-	const c=document.createElement("canvas");
-	c.width=128; c.height=64;
-	const x=c.getContext("2d");
-	x.fillStyle="rgba(0,0,0,.6)";
-	x.fillRect(0,0,128,64);
-	x.fillStyle="#fff";
-	x.font="28px system-ui";
-	x.textAlign="center";
-	x.textBaseline="middle";
-	x.fillText(text,64,32);
-	const t=new THREE.CanvasTexture(c);
-	const s=new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true}));
-	s.scale.set(80,40,1);
-	return s;
-}
 
 /* ======================
    PLAYER CREATION
@@ -186,14 +101,9 @@ function makePlayer(name){
 		new THREE.MeshStandardMaterial({ color:0x00ff00 })
 	);
 
-	const tag = makeTextSprite(name);
-	tag.position.y = 80;
-	m.add(tag);
-
-	/* Chevron Arrow */
 	const arrow = new THREE.Group();
-	const mat = new THREE.MeshStandardMaterial({ color:0xffff00, emissive:0x222200 });
 	const armGeo = new THREE.BoxGeometry(3,18,3);
+	const mat = new THREE.MeshStandardMaterial({ color:0xffff00 });
 
 	const a1 = new THREE.Mesh(armGeo, mat);
 	a1.rotation.z = Math.PI/4;
@@ -211,32 +121,31 @@ function makePlayer(name){
 		pos: new THREE.Vector3(),
 		vel: new THREE.Vector3(),
 		target: new THREE.Vector3(),
-		targetY: 0,
 		lastUpdate: performance.now(),
+
+		// LOOK STATE
+		lastYaw: 0,
+		yawVelocity: 0,
+		lastLookTime: performance.now(),
+
 		arrow,
-		arrowAngle: 0,
-		arrowTarget: 0
+		arrowAngle: 0
 	};
 
 	return m;
 }
 
 /* ======================
-   UPDATE PLAYERS (SERVER TICK)
+   SERVER SNAPSHOT
 ====================== */
-const ray = new THREE.Raycaster();
-const down = new THREE.Vector3(0,-1,0);
-const tmp = new THREE.Vector3();
-const look = new THREE.Vector3();
-
 async function updatePlayers(){
 	const now = performance.now();
 	const data = await fetch("/map").then(r=>r.json());
-	tributeUI.innerHTML="<b>Tributes</b><br>"+data.map(p=>p.name).join("<br>");
 	const active = new Set();
 
 	for(const p of data){
 		active.add(p.id);
+
 		if(!players.has(p.id)){
 			const m = makePlayer(p.name);
 			playerGroup.add(m);
@@ -246,28 +155,20 @@ async function updatePlayers(){
 		const m = players.get(p.id);
 		const u = m.userData;
 
-		const dt = Math.max((now - u.lastUpdate)/1000, 0.001);
 		const newPos = new THREE.Vector3(p.x,0,p.z);
+		const dt = Math.max((now - u.lastUpdate)/1000, 0.001);
 
 		u.vel.copy(newPos).sub(u.pos).divideScalar(dt);
 		u.pos.copy(newPos);
 		u.lastUpdate = now;
 
-		tmp.set(p.x,5000,p.z);
-		ray.set(tmp,down);
-		const hit = terrainMesh ? ray.intersectObject(terrainMesh,true)[0] : null;
-		u.targetY = hit ? hit.point.y + 6 : 6;
-
-		const hp = p.health ?? 100;
-		if(hp > 66) m.material.color.set(0x00ff00);
-		else if(hp > 33) m.material.color.set(0xffaa00);
-		else m.material.color.set(0xff0000);
-
+		/* LOOK SNAPSHOT */
 		if(p.lookX !== undefined){
-			look.set(p.lookX,0,p.lookZ);
-			if(look.lengthSq()>0.001){
-				u.arrowTarget = -Math.atan2(look.x, look.z);
-			}
+			const yaw = -Math.atan2(p.lookX, p.lookZ);
+			const dy = THREE.MathUtils.angleDifference(yaw, u.lastYaw);
+			u.yawVelocity = dy / dt;
+			u.lastYaw = yaw;
+			u.lastLookTime = now;
 		}
 	}
 
@@ -281,52 +182,30 @@ async function updatePlayers(){
 setInterval(updatePlayers,200);
 
 /* ======================
-   CAMERA FOLLOW
-====================== */
-let followed = null;
-addEventListener("pointerdown",e=>{
-	const mouse = new THREE.Vector2(
-		(e.clientX/innerWidth)*2-1,
-		-(e.clientY/innerHeight)*2+1
-	);
-	const ray = new THREE.Raycaster();
-	ray.setFromCamera(mouse,camera);
-	const hit = ray.intersectObjects(playerGroup.children)[0];
-	if(hit) followed = hit.object;
-});
-
-addEventListener("keydown",e=>{
-	if(e.key==="f") followed = null;
-});
-
-/* ======================
    LOOP (PREDICTION)
 ====================== */
 function animate(){
 	requestAnimationFrame(animate);
-	const dt = Math.min(0.05, renderer.info.render.frame * 0.016);
 
 	for(const m of playerGroup.children){
 		const u = m.userData;
 
-		/* Dead reckoning */
+		/* Position prediction */
 		u.target.copy(u.pos).addScaledVector(u.vel, 0.12);
+		m.position.lerp(u.target, 0.15);
 
-		m.position.x = THREE.MathUtils.lerp(m.position.x, u.target.x, 0.15);
-		m.position.z = THREE.MathUtils.lerp(m.position.z, u.target.z, 0.15);
-		m.position.y = THREE.MathUtils.lerp(m.position.y, u.targetY, 0.2);
+		/* LOOK PREDICTION (ZERO LATENCY) */
+		const predictTime = 0.14; // ~140ms
+		const predictedYaw =
+			u.lastYaw + u.yawVelocity * predictTime;
 
-		u.arrowAngle = THREE.MathUtils.lerp(u.arrowAngle, u.arrowTarget, 0.18);
+		u.arrowAngle = THREE.MathUtils.lerp(
+			u.arrowAngle,
+			predictedYaw,
+			0.25
+		);
+
 		u.arrow.rotation.y = u.arrowAngle;
-	}
-
-	/* Cinematic follow */
-	if(followed){
-		const speed = followed.userData.vel.length();
-		const offset = new THREE.Vector3(0, 400 + speed*0.4, 700 + speed);
-		const targetCam = followed.position.clone().add(offset);
-		camera.position.lerp(targetCam, 0.06);
-		camera.lookAt(followed.position);
 	}
 
 	controls.update();
