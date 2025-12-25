@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>HG Spectator Map</title>
+<title>Spectator Map</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
 	body { margin:0; overflow:hidden; background:black; }
@@ -119,10 +119,25 @@ async function updatePlayers() {
 			playerGroup.add(m);
 			players.set(p.id, m);
 		}
+
 		const m = players.get(p.id);
-		m.position.lerp(new THREE.Vector3(p.x,50,p.z),0.35);
+
+		/* === TERRAIN HEIGHT CORRECTION === */
+		const targetPos = new THREE.Vector3(
+			p.x,
+			(p.y || 0) + 6,
+			p.z
+		);
+		m.position.lerp(targetPos, 0.35);
+
+		/* === LOOK DIRECTION ARROW === */
+		if (p.lookX !== undefined) {
+			const dir = new THREE.Vector3(p.lookX, 0, p.lookZ).normalize();
+			m.userData.arrow.setDirection(dir);
+		}
 	}
 }
+
 setInterval(updatePlayers, 200);
 
 /* ======================
@@ -154,12 +169,30 @@ window.addEventListener("keydown", e=>{
 function follow() {
 	if (!tracked || followMode==="free") return;
 
-	const off =
-		followMode==="behind"
-			? new THREE.Vector3(0,300,700)
-			: new THREE.Vector3(0,1200,0);
+	/* === SPEED ESTIMATION === */
+	if (lastTrackedPos) {
+		trackedVelocity = tracked.position.distanceTo(lastTrackedPos);
+	}
+	lastTrackedPos = tracked.position.clone();
 
-	camera.position.lerp(tracked.position.clone().add(off),0.08);
+	const speedZoom = THREE.MathUtils.clamp(trackedVelocity * 6, 0, 1200);
+
+	let offset;
+	if (followMode === "behind") {
+		offset = new THREE.Vector3(
+			0,
+			300 + speedZoom * 0.3,
+			700 + speedZoom
+		);
+	} else {
+		offset = new THREE.Vector3(
+			0,
+			1200 + speedZoom,
+			0
+		);
+	}
+
+	camera.position.lerp(tracked.position.clone().add(offset), 0.08);
 	camera.lookAt(tracked.position);
 }
 
