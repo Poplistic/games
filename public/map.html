@@ -6,19 +6,36 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
-	body { margin:0; overflow:hidden; background:black; }
+	body {
+		margin:0;
+		overflow:hidden;
+		background:black;
+	}
+
+	canvas { display:block }
+
 	.ui {
 		position:absolute;
 		color:white;
-		font-family:sans-serif;
-		background:rgba(0,0,0,.6);
-		padding:6px;
+		font-family:system-ui, sans-serif;
+		background:rgba(20,20,20,.65);
+		backdrop-filter: blur(6px);
+		border:1px solid rgba(255,255,255,.1);
+		border-radius:8px;
+		padding:8px 10px;
 		font-size:12px;
+		box-shadow:0 0 20px rgba(0,0,0,.6);
 	}
-	input { background:#111; color:white; border:1px solid #333; }
+
+	input {
+		background:#111;
+		color:white;
+		border:1px solid #333;
+		border-radius:4px;
+		padding:4px;
+	}
 </style>
 
-<!-- ✅ IMPORT MAP (FIXES "three" MODULE ERROR) -->
 <script type="importmap">
 {
   "imports": {
@@ -38,22 +55,61 @@
 ====================== */
 import * as THREE from "three";
 import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+import { OBJLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/OBJLoader.js";
 
 /* ======================
-   THREE SETUP
+   RENDERER
 ====================== */
 const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(devicePixelRatio);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.appendChild(renderer.domElement);
 
+/* ======================
+   SCENE
+====================== */
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x000000);
+scene.background = new THREE.Color(0x050508);
+scene.fog = new THREE.Fog(0x050508, 3000, 12000);
 
-const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 15000);
+/* ======================
+   CAMERA
+====================== */
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 20000);
 camera.position.set(2000,2000,2000);
 
+/* ======================
+   CONTROLS
+====================== */
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
+
+/* ======================
+   LIGHTING
+====================== */
+scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+
+const sun = new THREE.DirectionalLight(0xffffff, 1.1);
+sun.position.set(3000,6000,2000);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048,2048);
+sun.shadow.camera.near = 100;
+sun.shadow.camera.far = 12000;
+sun.shadow.camera.left = -6000;
+sun.shadow.camera.right = 6000;
+sun.shadow.camera.top = 6000;
+sun.shadow.camera.bottom = -6000;
+scene.add(sun);
+
+/* Rim light */
+const rim = new THREE.DirectionalLight(0x88aaff, 0.4);
+rim.position.set(-3000,2000,-2000);
+scene.add(rim);
 
 /* ======================
    GROUPS
@@ -61,6 +117,36 @@ controls.enableDamping = true;
 const playerGroup = new THREE.Group();
 const spectatorGroup = new THREE.Group();
 scene.add(playerGroup, spectatorGroup);
+
+/* ======================
+   LOAD ARENA OBJ
+====================== */
+const objLoader = new OBJLoader();
+let terrainMesh = null;
+
+objLoader.load(
+	"arena.obj",
+	obj=>{
+		obj.traverse(m=>{
+			if (m.isMesh) {
+				m.castShadow = true;
+				m.receiveShadow = true;
+				m.material.side = THREE.DoubleSide;
+			}
+		});
+
+		obj.scale.set(1,1,1); // ✅ EXACT SCALE REQUESTED
+		scene.add(obj);
+
+		// Use arena as terrain ray target
+		terrainMesh = obj;
+	},
+	xhr=>console.log(`Arena ${(xhr.loaded/xhr.total*100)|0}%`),
+	err=>console.error("Arena load failed", err)
+);
+
+/* Optional reference grid */
+// scene.add(new THREE.GridHelper(20000, 40, 0x333333, 0x222222));
 
 /* ======================
    UI
@@ -91,7 +177,6 @@ function ui(top, left, right, bottom){
 let tracked = null;
 let lastTrackedPos = null;
 let trackedVelocity = 0;
-
 const players = new Map();
 let followMode = "behind";
 
@@ -100,12 +185,16 @@ let followMode = "behind";
 ====================== */
 function makePlayer() {
 	const dot = new THREE.Mesh(
-		new THREE.SphereGeometry(8),
-		new THREE.MeshBasicMaterial({ color:0x00ff00 })
+		new THREE.SphereGeometry(10,16,16),
+		new THREE.MeshStandardMaterial({
+			color:0x00ff88,
+			emissive:0x003322
+		})
 	);
+	dot.castShadow = true;
 
 	const hit = new THREE.Mesh(
-		new THREE.SphereGeometry(40),
+		new THREE.SphereGeometry(45),
 		new THREE.MeshBasicMaterial({ transparent:true, opacity:0 })
 	);
 	hit.userData.isHitbox = true;
@@ -114,7 +203,7 @@ function makePlayer() {
 	const arrow = new THREE.ArrowHelper(
 		new THREE.Vector3(0,0,1),
 		new THREE.Vector3(),
-		80,
+		90,
 		0xffff00
 	);
 	dot.add(arrow);
@@ -128,29 +217,21 @@ function makePlayer() {
 ====================== */
 const terrainRay = new THREE.Raycaster();
 const rayOrigin = new THREE.Vector3();
-const rayDown = new THREE.Vector3(0, -1, 0);
+const rayDown = new THREE.Vector3(0,-1,0);
 const targetPos = new THREE.Vector3();
 const lookDir = new THREE.Vector3();
 
-/* ⚠️ You must define terrainMesh somewhere */
-let terrainMesh = new THREE.Mesh(
-	new THREE.PlaneGeometry(20000,20000),
-	new THREE.MeshBasicMaterial({ visible:false })
-);
-terrainMesh.rotation.x = -Math.PI/2;
-scene.add(terrainMesh);
-
 async function updatePlayers() {
-	const data = await fetch("/map").then(r => r.json());
+	const data = await fetch("/map").then(r=>r.json());
 
 	tributeUI.innerHTML =
 		"<b>Tributes</b><br>" +
-		data.map(p => p.name).join("<br>");
+		data.map(p=>p.name).join("<br>");
 
-	const activeIds = new Set();
+	const active = new Set();
 
 	for (const p of data) {
-		activeIds.add(p.id);
+		active.add(p.id);
 
 		if (!players.has(p.id)) {
 			const m = makePlayer();
@@ -160,28 +241,30 @@ async function updatePlayers() {
 
 		const m = players.get(p.id);
 
-		rayOrigin.set(p.x, 5000, p.z);
-		terrainRay.set(rayOrigin, rayDown);
-
-		const hits = terrainRay.intersectObject(terrainMesh, true);
-		const y = hits.length ? hits[0].point.y + 6 : (p.y ?? 6);
+		let y = p.y ?? 6;
+		if (terrainMesh) {
+			rayOrigin.set(p.x, 5000, p.z);
+			terrainRay.set(rayOrigin, rayDown);
+			const hits = terrainRay.intersectObject(terrainMesh, true);
+			if (hits[0]) y = hits[0].point.y + 6;
+		}
 
 		targetPos.set(p.x, y, p.z);
 		m.position.lerp(targetPos, 0.35);
 
 		if (p.lookX !== undefined) {
-			lookDir.set(p.lookX, 0, p.lookZ);
-			if (lookDir.lengthSq() > 0.0001) {
+			lookDir.set(p.lookX,0,p.lookZ);
+			if (lookDir.lengthSq()>0.0001) {
 				lookDir.normalize();
 				m.userData.arrow.setDirection(lookDir);
 			}
 		}
 	}
 
-	for (const [id, mesh] of players) {
-		if (!activeIds.has(id)) {
-			playerGroup.remove(mesh);
-			mesh.traverse(o=>{
+	for (const [id,m] of players) {
+		if (!active.has(id)) {
+			playerGroup.remove(m);
+			m.traverse(o=>{
 				o.geometry?.dispose();
 				o.material?.dispose();
 			});
@@ -189,8 +272,7 @@ async function updatePlayers() {
 		}
 	}
 }
-
-setInterval(updatePlayers, 200);
+setInterval(updatePlayers,200);
 
 /* ======================
    CLICK TRACK
@@ -201,10 +283,10 @@ const mouse = new THREE.Vector2();
 addEventListener("pointerdown", e=>{
 	mouse.x = (e.clientX/innerWidth)*2 - 1;
 	mouse.y = -(e.clientY/innerHeight)*2 + 1;
-	ray.setFromCamera(mouse, camera);
+	ray.setFromCamera(mouse,camera);
 
-	const hits = ray.intersectObjects(playerGroup.children, true)
-		.filter(h => h.object.userData.isHitbox);
+	const hits = ray.intersectObjects(playerGroup.children,true)
+		.filter(h=>h.object.userData.isHitbox);
 
 	if (hits[0]) tracked = hits[0].object.parent;
 });
@@ -226,13 +308,13 @@ function follow() {
 
 	lastTrackedPos = tracked.position.clone();
 
-	const speedZoom = THREE.MathUtils.clamp(trackedVelocity * 6, 0, 1200);
+	const speedZoom = THREE.MathUtils.clamp(trackedVelocity*6,0,1200);
 
 	const offset = followMode==="behind"
-		? new THREE.Vector3(0,300 + speedZoom*0.3,700 + speedZoom)
-		: new THREE.Vector3(0,1200 + speedZoom,0);
+		? new THREE.Vector3(0,300+speedZoom*0.3,700+speedZoom)
+		: new THREE.Vector3(0,1200+speedZoom,0);
 
-	camera.position.lerp(tracked.position.clone().add(offset), 0.08);
+	camera.position.lerp(tracked.position.clone().add(offset),0.08);
 	camera.lookAt(tracked.position);
 }
 
@@ -245,8 +327,9 @@ socket.on("spectators:init", list=>{
 	list.forEach(s=>{
 		const m = new THREE.Mesh(
 			new THREE.SphereGeometry(12),
-			new THREE.MeshBasicMaterial({ color:s.color })
+			new THREE.MeshStandardMaterial({ color:s.color })
 		);
+		m.castShadow = true;
 		m.userData.id = s.id;
 		spectatorGroup.add(m);
 	});
@@ -282,8 +365,8 @@ socket.on("kill:feed", list=>{
 setInterval(()=>{
 	const dir = new THREE.Vector3();
 	camera.getWorldDirection(dir);
-	socket.emit("spectator:update", { pos:camera.position, dir });
-}, 120);
+	socket.emit("spectator:update",{ pos:camera.position, dir });
+},120);
 
 /* ======================
    RESIZE
@@ -301,7 +384,7 @@ function animate(){
 	requestAnimationFrame(animate);
 	follow();
 	controls.update();
-	renderer.render(scene, camera);
+	renderer.render(scene,camera);
 }
 animate();
 </script>
