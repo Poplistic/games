@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Spectator Map</title>
+<title>HG Spectator Map</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
 	body { margin:0; overflow:hidden; background:black; }
@@ -33,8 +33,6 @@ renderer.setSize(innerWidth, innerHeight);
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x000000);
-
 const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 15000);
 camera.position.set(2000,2000,2000);
 
@@ -106,7 +104,7 @@ function makePlayer() {
 }
 
 /* ======================
-   PLAYER FETCH (5Hz)
+   FETCH PLAYERS (5Hz)
 ====================== */
 async function updatePlayers() {
 	const data = await fetch("/map").then(r=>r.json());
@@ -224,7 +222,7 @@ addEventListener("resize",()=>{
 });
 
 /* ======================
-   LOOP
+   LOOP (RENDER ONLY)
 ====================== */
 function animate(){
 	requestAnimationFrame(animate);
