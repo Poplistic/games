@@ -74,7 +74,6 @@ function ui(top, left, right, bottom){
 ====================== */
 
 let tracked = null;
-let followMode = "behind";
 	
 let lastTrackedPos = null;
 let trackedVelocity = 0;
@@ -113,14 +112,28 @@ function makePlayer() {
 /* ======================
    FETCH PLAYERS (5Hz)
 ====================== */
-async function updatePlayers() {
-	const data = await fetch("/map").then(r=>r.json());
 
+const terrainRay = new THREE.Raycaster();
+const rayOrigin = new THREE.Vector3();
+const rayDown = new THREE.Vector3(0, -1, 0);
+const targetPos = new THREE.Vector3();
+const lookDir = new THREE.Vector3();
+
+async function updatePlayers() {
+	const data = await fetch("/map").then(r => r.json());
+
+	/* === UI === */
 	tributeUI.innerHTML =
 		"<b>Tributes</b><br>" +
-		data.map(p=>p.name).join("<br>");
+		data.map(p => p.name).join("<br>");
+
+	/* === Track active players === */
+	const activeIds = new Set();
 
 	for (const p of data) {
+		activeIds.add(p.id);
+
+		/* === Create player if missing === */
 		if (!players.has(p.id)) {
 			const m = makePlayer();
 			playerGroup.add(m);
@@ -130,17 +143,37 @@ async function updatePlayers() {
 		const m = players.get(p.id);
 
 		/* === TERRAIN HEIGHT CORRECTION === */
-		const targetPos = new THREE.Vector3(
-			p.x,
-			(p.y || 0) + 6,
-			p.z
-		);
+		rayOrigin.set(p.x, 5000, p.z);
+		terrainRay.set(rayOrigin, rayDown);
+
+		const hits = terrainRay.intersectObject(terrainMesh, true);
+		const y = hits.length
+			? hits[0].point.y + 6
+			: (p.y ?? 6);
+
+		targetPos.set(p.x, y, p.z);
 		m.position.lerp(targetPos, 0.35);
 
 		/* === LOOK DIRECTION ARROW === */
-		if (p.lookX !== undefined) {
-			const dir = new THREE.Vector3(p.lookX, 0, p.lookZ).normalize();
-			m.userData.arrow.setDirection(dir);
+		if (p.lookX !== undefined && m.userData.arrow) {
+			lookDir.set(p.lookX, 0, p.lookZ);
+
+			if (lookDir.lengthSq() > 0.0001) {
+				lookDir.normalize();
+				m.userData.arrow.setDirection(lookDir);
+			}
+		}
+	}
+
+	/* === REMOVE DISCONNECTED PLAYERS === */
+	for (const [id, mesh] of players) {
+		if (!activeIds.has(id)) {
+			playerGroup.remove(mesh);
+			mesh.traverse(o => {
+				if (o.geometry) o.geometry.dispose();
+				if (o.material) o.material.dispose();
+			});
+			players.delete(id);
 		}
 	}
 }
