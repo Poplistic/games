@@ -3,38 +3,25 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createServer } from "http";
 import { Server } from "socket.io";
+import fetch from "node-fetch"; // npm install node-fetch
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/* ======================
-   ENV
-====================== */
 const { SESSION_TOKEN, PORT = 10000 } = process.env;
 if (!SESSION_TOKEN) {
     console.error("❌ SESSION_TOKEN missing");
     process.exit(1);
 }
 
-/* ======================
-   EXPRESS
-====================== */
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
-/* ======================
-   HTTP + WS
-====================== */
 const httpServer = createServer(app);
-const io = new Server(httpServer, {
-    cors: { origin: "*" },
-    maxHttpBufferSize: 1e6
-});
+const io = new Server(httpServer, { cors: { origin: "*" } });
 
-/* ======================
-   SECURITY
-====================== */
+/* ====================== SECURITY ====================== */
 let lastNonce = 0;
 let times = [];
 function verify(req) {
@@ -48,27 +35,21 @@ function verify(req) {
     return times.length < 40;
 }
 
-/* ======================
-   LIVE STATE
-====================== */
+/* ====================== LIVE STATE ====================== */
 let players = [];
 let killFeed = [];
 let dead = [];
 const MAX_KILLS = 20;
 
-/* ======================
-   WEAPONS (Hunger Games style)
-====================== */
+/* ====================== WEAPONS ====================== */
 const meleeWeapons = ["Sword","Dagger","Axe","Mace","Club","Knife","Spear"];
 const rangedWeapons = ["Bow","Sling","Throwing Knife","Trident","Net"];
 const traps = ["Fire","Poison","Explosive","Falling Rocks","Electric Trap"];
 
 function generateDeathMessage(victim, killer) {
-    let weaponType = Math.random();
-    let weapon = "";
-    let action = "";
-
     if (!killer) return `${victim} died.`;
+    const weaponType = Math.random();
+    let weapon = "", action = "";
 
     if (weaponType < 0.5) {
         weapon = meleeWeapons[Math.floor(Math.random()*meleeWeapons.length)];
@@ -83,20 +64,17 @@ function generateDeathMessage(victim, killer) {
     return `${victim} ${action}`;
 }
 
-/* ======================
-   MAP ENDPOINTS
-====================== */
+/* ====================== MAP ENDPOINTS ====================== */
 app.post("/map", (req,res) => {
     if (!verify(req)) return res.sendStatus(403);
     if (!Array.isArray(req.body.players)) return res.sendStatus(400);
     players = req.body.players;
     res.sendStatus(200);
 });
+
 app.get("/map", (_, res) => res.json(players));
 
-/* ======================
-   KILL FEED
-====================== */
+/* ====================== KILL FEED ====================== */
 app.post("/kill", (req,res) => {
     if (!verify(req)) return res.sendStatus(403);
     const { victim, killer } = req.body;
@@ -111,16 +89,13 @@ app.post("/kill", (req,res) => {
 
 app.get("/kills", (_,res) => res.json(killFeed));
 
-/* ======================
-   DEAD PLAYERS
-====================== */
+/* ====================== DEAD PLAYERS ====================== */
 app.post("/death", (req,res) => {
     if (!verify(req)) return res.sendStatus(403);
     const { id, name, killer } = req.body;
     if (!id || !name) return res.sendStatus(400);
 
     dead.push({ id, name });
-
     const text = generateDeathMessage(name, killer);
     killFeed.unshift({ text, time: Date.now() });
     killFeed = killFeed.slice(0, MAX_KILLS);
@@ -138,28 +113,34 @@ app.post("/reset-dead", (req,res) => {
     res.sendStatus(200);
 });
 
-/* ======================
-   ROBLOX BUST PROXY
-====================== */
-app.get("/bust/:id", async (req, res) => {
-    const id = req.params.id;
-    try {
-        const url = `https://www.roblox.com/headshot-thumbnail/image?userId=${id}&width=150&height=150&format=png`;
-        const response = await fetch(url);
-        if (!response.ok) return res.sendStatus(response.status);
+/* ====================== BUST ENDPOINT ====================== */
+const bustCache = new Map();
+app.get("/bust/:id", async (req,res) => {
+    const userId = req.params.id;
+    console.log("[BUST] Request for:", userId);
 
-        const buffer = await response.arrayBuffer();
+    if (!/^\d+$/.test(userId)) return res.status(400).send("Invalid UserId");
+    if (bustCache.has(userId)) {
         res.setHeader("Content-Type", "image/png");
-        res.send(Buffer.from(buffer));
-    } catch (err) {
-        console.error("Failed to fetch Roblox bust:", err);
-        res.sendStatus(500);
+        return res.send(bustCache.get(userId));
+    }
+
+    const robloxUrl = `https://www.roblox.com/headshot-thumbnail/image?userId=${userId}&width=150&height=150&format=png`;
+    try {
+        const r = await fetch(robloxUrl);
+        if (!r.ok) return res.status(404).send("Roblox bust not found");
+
+        const buffer = Buffer.from(await r.arrayBuffer());
+        bustCache.set(userId, buffer);
+        res.setHeader("Content-Type", "image/png");
+        res.send(buffer);
+    } catch(err) {
+        console.error("[BUST] Error fetching bust:", userId, err);
+        res.status(500).send("Internal Server Error");
     }
 });
 
-/* ======================
-   SOCKET.IO
-====================== */
+/* ====================== SOCKET.IO ====================== */
 io.on("connection", socket => {
     socket.on("chat:send", msg => {
         if (typeof msg !== "string" || msg.length > 120) return;
@@ -167,10 +148,7 @@ io.on("connection", socket => {
     });
 });
 
-/* ======================
-   START SERVER
-====================== */
+/* ====================== START SERVER ====================== */
 httpServer.listen(PORT, () => {
     console.log(`🚀 HG Relay running on http://localhost:${PORT}`);
-    console.log(`📦 Serving static files from /public`);
 });
