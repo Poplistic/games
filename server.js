@@ -24,10 +24,7 @@ if (!SESSION_TOKEN) {
 ====================== */
 const app = express();
 app.use(express.json({ limit: "1mb" }));
-
-// Serve static files (arena.obj, spectator HTML)
-const PUBLIC_DIR = path.join(__dirname, "public");
-app.use(express.static(PUBLIC_DIR));
+app.use(express.static(path.join(__dirname, "public")));
 
 /* ======================
    HTTP + WS
@@ -43,14 +40,11 @@ const io = new Server(httpServer, {
 ====================== */
 let lastNonce = 0;
 let times = [];
-
 function verify(req) {
     const { token, nonce, timestamp } = req.body ?? {};
-
     if (token !== SESSION_TOKEN) return false;
     if (typeof nonce !== "number" || nonce <= lastNonce) return false;
-    if (Math.abs(Date.now() / 1000 - timestamp) > 10) return false;
-
+    if (Math.abs(Date.now()/1000 - timestamp) > 10) return false;
     lastNonce = nonce;
     times.push(Date.now());
     times = times.filter(t => Date.now() - t < 1000);
@@ -62,75 +56,87 @@ function verify(req) {
 ====================== */
 let players = [];
 let killFeed = [];
-const MAX_KILLS = 20;
 let dead = [];
+const MAX_KILLS = 20;
 
 /* ======================
-   WEAPONS
+   WEAPONS (Hunger Games style)
 ====================== */
-const weapons = [
-    "Sword","Bow","Spear","Dagger","Axe","Trident",
-    "Club","Sling","Mace","Knife","Net","Fire","Poison"
-];
+const meleeWeapons = ["Sword","Dagger","Axe","Mace","Club","Knife","Spear"];
+const rangedWeapons = ["Bow","Sling","Throwing Knife","Trident","Net"];
+const traps = ["Fire","Poison","Explosive","Falling Rocks","Electric Trap"];
 
-function randomWeapon() {
-    return weapons[Math.floor(Math.random() * weapons.length)];
+function generateDeathMessage(victim, killer) {
+    let weaponType = Math.random();
+    let weapon = "";
+    let action = "";
+
+    if (!killer) return `${victim} died.`; // No killer, natural death
+
+    if (weaponType < 0.5) {
+        // Melee
+        weapon = meleeWeapons[Math.floor(Math.random()*meleeWeapons.length)];
+        action = `was slain by ${killer} using ${weapon}`;
+    } else if (weaponType < 0.85) {
+        // Ranged
+        weapon = rangedWeapons[Math.floor(Math.random()*rangedWeapons.length)];
+        action = `was killed by ${killer}'s ${weapon}`;
+    } else {
+        // Traps / environmental
+        weapon = traps[Math.floor(Math.random()*traps.length)];
+        action = `was caught in ${killer}'s ${weapon}`;
+    }
+    return `${victim} ${action}`;
 }
 
 /* ======================
    MAP ENDPOINTS
 ====================== */
-app.post("/map", (req, res) => {
+app.post("/map", (req,res) => {
     if (!verify(req)) return res.sendStatus(403);
     if (!Array.isArray(req.body.players)) return res.sendStatus(400);
     players = req.body.players;
     res.sendStatus(200);
 });
-
 app.get("/map", (_, res) => res.json(players));
 
 /* ======================
    KILL FEED
 ====================== */
-app.post("/kill", (req, res) => {
+app.post("/kill", (req,res) => {
     if (!verify(req)) return res.sendStatus(403);
-    const { killer, victim, weapon } = req.body;
-    if (!killer || !victim) return res.sendStatus(400);
+    const { victim, killer } = req.body;
+    if (!victim) return res.sendStatus(400);
 
-    const w = weapon || randomWeapon();
-    const text = `${killer} was slain by ${victim}${w ? " using "+w : ""}`;
+    const text = generateDeathMessage(victim, killer);
     killFeed.unshift({ text, time: Date.now() });
     killFeed = killFeed.slice(0, MAX_KILLS);
-
     io.emit("kill:feed", killFeed);
     res.sendStatus(200);
 });
 
-app.get("/kills", (_, res) => res.json(killFeed));
+app.get("/kills", (_,res) => res.json(killFeed));
 
 /* ======================
    DEAD PLAYERS
 ====================== */
-app.post("/death", (req, res) => {
+app.post("/death", (req,res) => {
     if (!verify(req)) return res.sendStatus(403);
     const { id, name, killer } = req.body;
     if (!id || !name) return res.sendStatus(400);
 
     dead.push({ id, name });
 
-    if (killer) {
-        const w = randomWeapon();
-        const text = `${name} was slain by ${killer} using ${w}`;
-        killFeed.unshift({ text, time: Date.now() });
-        killFeed = killFeed.slice(0, MAX_KILLS);
-        io.emit("kill:feed", killFeed);
-    }
+    const text = generateDeathMessage(name, killer);
+    killFeed.unshift({ text, time: Date.now() });
+    killFeed = killFeed.slice(0, MAX_KILLS);
+    io.emit("kill:feed", killFeed);
 
     res.sendStatus(200);
 });
 
-app.get("/dead", (_, res) => res.json(dead));
-app.post("/reset-dead", (req, res) => {
+app.get("/dead", (_,res) => res.json(dead));
+app.post("/reset-dead", (req,res) => {
     if (!verify(req)) return res.sendStatus(403);
     dead = [];
     killFeed = [];
