@@ -1,64 +1,41 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-<meta charset="UTF-8" />
-<title>HG Live Map</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta charset="UTF-8">
+<title>Spectator Map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-	body { margin: 0; overflow: hidden; background: #000; }
-	.label {
-		position: absolute;
-		color: white;
-		font-family: sans-serif;
-		font-size: 12px;
-		pointer-events: none;
-		text-shadow: 0 0 4px black;
+	body { margin:0; overflow:hidden; background:black; }
+	.ui {
+		position:absolute;
+		color:white;
+		font-family:sans-serif;
+		background:rgba(0,0,0,.6);
+		padding:6px;
+		font-size:12px;
 	}
 </style>
 </head>
-
 <body>
 
-<!-- Socket.IO -->
 <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 
 <script type="module">
-/* ======================
-   THREE IMPORTS (FIXED)
-====================== */
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
 import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
-import { Sky } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/objects/Sky.js";
 
 /* ======================
-   BASIC SETUP
+   THREE SETUP
 ====================== */
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias:true });
 renderer.setSize(innerWidth, innerHeight);
-renderer.setPixelRatio(devicePixelRatio);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-
-const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 15000);
-camera.position.set(2000, 1800, 2000);
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 15000);
+camera.position.set(2000,2000,2000);
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.enableDamping = true;
-
-/* ======================
-   SKY + LIGHT
-====================== */
-const sky = new Sky();
-sky.scale.setScalar(10000);
-scene.add(sky);
-
-const sun = new THREE.Vector3();
-scene.add(new THREE.AmbientLight(0x404060, 0.4));
-
-const dirLight = new THREE.DirectionalLight(0xffffff, 3);
-scene.add(dirLight);
 
 /* ======================
    GROUPS
@@ -68,181 +45,164 @@ const spectatorGroup = new THREE.Group();
 scene.add(playerGroup, spectatorGroup);
 
 /* ======================
+   UI
+====================== */
+const tributeUI = document.createElement("div");
+tributeUI.className="ui";
+tributeUI.style.top="10px";
+tributeUI.style.left="10px";
+document.body.appendChild(tributeUI);
+
+const killUI = document.createElement("div");
+killUI.className="ui";
+killUI.style.top="10px";
+killUI.style.right="10px";
+document.body.appendChild(killUI);
+
+const chatUI = document.createElement("div");
+chatUI.className="ui";
+chatUI.style.bottom="10px";
+chatUI.style.left="10px";
+chatUI.innerHTML=`<div id="log" style="height:120px;overflow:auto"></div><input id="input" placeholder="chat" style="width:100%">`;
+document.body.appendChild(chatUI);
+
+/* ======================
    STATE
 ====================== */
-const playerSprites = new Map();
-const spectatorMeshes = new Map();
-let trackedPlayerId = null;
+const players = new Map();
+let tracked = null;
+let followMode = "behind";
 
 /* ======================
-   HELPERS
+   PLAYER MARKER
 ====================== */
-function lerp(a, b, t) {
-	return a + (b - a) * t;
-}
-
-function smoothVec(v, target, t) {
-	v.x = lerp(v.x, target.x, t);
-	v.y = lerp(v.y, target.y, t);
-	v.z = lerp(v.z, target.z, t);
-}
-
-/* ======================
-   PLAYER DOT (SMALL + CLICKABLE)
-====================== */
-function makePlayerDot() {
+function makePlayer() {
 	const dot = new THREE.Mesh(
-		new THREE.SphereGeometry(8, 12, 12),
-		new THREE.MeshBasicMaterial({ color: 0x00ff00 })
+		new THREE.SphereGeometry(8),
+		new THREE.MeshBasicMaterial({ color:0x00ff00 })
 	);
-
-	// Invisible big hitbox (mobile friendly)
-	const hitbox = new THREE.Mesh(
-		new THREE.SphereGeometry(40, 8, 8),
-		new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 })
+	const hit = new THREE.Mesh(
+		new THREE.SphereGeometry(40),
+		new THREE.MeshBasicMaterial({ transparent:true, opacity:0 })
 	);
-
-	dot.add(hitbox);
-	dot.userData.hitbox = hitbox;
+	dot.add(hit);
+	dot.userData.hit = hit;
+	dot.userData.arrow = new THREE.ArrowHelper(
+		new THREE.Vector3(0,0,1),
+		new THREE.Vector3(),
+		80,
+		0xffff00
+	);
+	dot.add(dot.userData.arrow);
 	return dot;
 }
 
 /* ======================
-   PLAYER LABEL
-====================== */
-function makeLabel() {
-	const el = document.createElement("div");
-	el.className = "label";
-	document.body.appendChild(el);
-	return el;
-}
-
-/* ======================
-   UPDATE PLAYERS
+   FETCH PLAYERS
 ====================== */
 async function updatePlayers() {
-	const data = await fetch("/map").then(r => r.json());
+	const data = await fetch("/map").then(r=>r.json());
+	tributeUI.innerHTML="<b>Tributes</b><br>"+data.map(p=>p.name).join("<br>");
 
 	for (const p of data) {
-		if (!playerSprites.has(p.id)) {
-			const mesh = makePlayerDot();
-			mesh.userData.id = p.id;
-			mesh.userData.label = makeLabel();
-			playerGroup.add(mesh);
-			playerSprites.set(p.id, mesh);
+		if (!players.has(p.id)) {
+			const m = makePlayer();
+			playerGroup.add(m);
+			players.set(p.id, m);
 		}
-
-		const m = playerSprites.get(p.id);
-		smoothVec(m.position, { x: p.x, y: 50, z: p.z }, 0.35);
-
-		const dist = camera.position.distanceTo(m.position).toFixed(0);
-		m.userData.label.innerText = `${p.name} • ${dist}m`;
+		const m = players.get(p.id);
+		m.position.lerp(new THREE.Vector3(p.x,50,p.z),0.35);
 	}
 }
 
 /* ======================
-   CLICK TO TRACK PLAYER
+   CLICK TRACK
 ====================== */
-const raycaster = new THREE.Raycaster();
+const ray = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
-
-function onClick(e) {
-	mouse.x = (e.clientX / innerWidth) * 2 - 1;
-	mouse.y = -(e.clientY / innerHeight) * 2 + 1;
-
-	raycaster.setFromCamera(mouse, camera);
-	const hits = raycaster.intersectObjects(playerGroup.children, true);
-
-	if (hits.length) {
-		trackedPlayerId = hits[0].object.parent.userData.id;
-	}
-}
-
-window.addEventListener("pointerdown", onClick);
+window.addEventListener("pointerdown", e=>{
+	mouse.x=(e.clientX/innerWidth)*2-1;
+	mouse.y=-(e.clientY/innerHeight)*2+1;
+	ray.setFromCamera(mouse,camera);
+	const hit = ray.intersectObjects(playerGroup.children,true)[0];
+	if (hit) tracked = hit.object.parent;
+});
 
 /* ======================
-   AUTO FOLLOW CAM
+   FOLLOW CAM
 ====================== */
-function followPlayer() {
-	if (!trackedPlayerId) return;
-	const m = playerSprites.get(trackedPlayerId);
-	if (!m) return;
+window.addEventListener("keydown", e=>{
+	if (e.key==="1") followMode="behind";
+	if (e.key==="2") followMode="overhead";
+	if (e.key==="3") followMode="free";
+});
 
-	const offset = new THREE.Vector3(0, 600, 800);
-	const targetPos = m.position.clone().add(offset);
-
-	smoothVec(camera.position, targetPos, 0.08);
-	camera.lookAt(m.position);
+function follow() {
+	if (!tracked || followMode==="free") return;
+	const off = followMode==="behind"
+		? new THREE.Vector3(0,300,700)
+		: new THREE.Vector3(0,1200,0);
+	camera.position.lerp(tracked.position.clone().add(off),0.08);
+	camera.lookAt(tracked.position);
 }
 
 /* ======================
-   SPECTATORS (SOCKET.IO)
+   SOCKET.IO
 ====================== */
 const socket = io();
 
-socket.on("spectators:init", list => {
-	list.forEach(addSpectator);
+socket.on("spectators:init", list=>{
+	list.forEach(s=>{
+		const m=new THREE.Mesh(
+			new THREE.SphereGeometry(12),
+			new THREE.MeshBasicMaterial({ color:s.color })
+		);
+		spectatorGroup.add(m);
+		m.userData.id=s.id;
+	});
 });
 
-socket.on("spectator:join", addSpectator);
-socket.on("spectator:update", updateSpectator);
-socket.on("spectator:leave", id => {
-	const m = spectatorMeshes.get(id);
-	if (m) {
-		spectatorGroup.remove(m);
-		spectatorMeshes.delete(id);
+socket.on("spectator:update", s=>{
+	const m=[...spectatorGroup.children].find(x=>x.userData.id===s.id);
+	if (m) m.position.set(s.pos.x,s.pos.y,s.pos.z);
+});
+
+socket.on("chat:msg", m=>{
+	const log=document.getElementById("log");
+	log.innerHTML+=`<div><b>${m.from}:</b> ${m.msg}</div>`;
+	log.scrollTop=log.scrollHeight;
+});
+
+document.getElementById("input").addEventListener("keydown",e=>{
+	if(e.key==="Enter"&&e.target.value){
+		socket.emit("chat:send",e.target.value);
+		e.target.value="";
 	}
 });
 
-function addSpectator(s) {
-	if (spectatorMeshes.has(s.id)) return;
-
-	const mesh = new THREE.Mesh(
-		new THREE.SphereGeometry(12, 12, 12),
-		new THREE.MeshBasicMaterial({ color: s.color })
-	);
-
-	spectatorGroup.add(mesh);
-	spectatorMeshes.set(s.id, mesh);
-}
-
-function updateSpectator(s) {
-	const m = spectatorMeshes.get(s.id);
-	if (!m) return;
-	m.position.set(s.pos.x, s.pos.y, s.pos.z);
-}
-
-/* Send our camera */
-setInterval(() => {
-	const dir = new THREE.Vector3();
-	camera.getWorldDirection(dir);
-
-	socket.emit("spectator:update", {
-		pos: camera.position,
-		dir
-	});
-}, 120);
+socket.on("kill:feed", list=>{
+	killUI.innerHTML="<b>Kills</b><br>"+list.map(k=>`${k.killer} ☠ ${k.victim}`).join("<br>");
+});
 
 /* ======================
-   ANIMATE
+   SEND CAMERA
 ====================== */
-async function animate() {
+setInterval(()=>{
+	const dir=new THREE.Vector3();
+	camera.getWorldDirection(dir);
+	socket.emit("spectator:update",{ pos:camera.position, dir });
+},120);
+
+/* ======================
+   LOOP
+====================== */
+async function animate(){
 	requestAnimationFrame(animate);
-
 	await updatePlayers();
-	followPlayer();
-
-	for (const m of playerSprites.values()) {
-		const p = m.position.clone().project(camera);
-		const x = (p.x * 0.5 + 0.5) * innerWidth;
-		const y = (-p.y * 0.5 + 0.5) * innerHeight;
-		m.userData.label.style.transform = `translate(${x}px,${y}px)`;
-	}
-
+	follow();
 	controls.update();
-	renderer.render(scene, camera);
+	renderer.render(scene,camera);
 }
-
 animate();
 </script>
 </body>
