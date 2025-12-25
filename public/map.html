@@ -24,7 +24,6 @@
 <script type="module">
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
 import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
-</script>
 
 /* ======================
    THREE SETUP
@@ -52,19 +51,20 @@ scene.add(playerGroup, spectatorGroup);
 ====================== */
 const tributeUI = ui("10px","10px");
 const killUI = ui("10px",null,"10px");
-const chatUI = ui(null,"10px","10px");
+const chatUI = ui(null, "10px", null, "10px");
 
 chatUI.innerHTML = `
 	<div id="log" style="height:120px;overflow:auto"></div>
 	<input id="input" placeholder="chat" style="width:100%">
 `;
 
-function ui(top,left,right){
-	const d=document.createElement("div");
-	d.className="ui";
-	if(top) d.style.top=top;
-	if(left) d.style.left=left;
-	if(right) d.style.right=right;
+function ui(top, left, right, bottom){
+	const d = document.createElement("div");
+	d.className = "ui";
+	if (top) d.style.top = top;
+	if (left) d.style.left = left;
+	if (right) d.style.right = right;
+	if (bottom) d.style.bottom = bottom;
 	document.body.appendChild(d);
 	return d;
 }
@@ -72,6 +72,13 @@ function ui(top,left,right){
 /* ======================
    STATE
 ====================== */
+
+let tracked = null;
+let followMode = "behind";
+	
+let lastTrackedPos = null;
+let trackedVelocity = 0;
+	
 const players = new Map();
 let tracked = null;
 let followMode = "behind";
