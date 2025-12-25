@@ -91,13 +91,12 @@ new OBJLoader().load("/arena.obj", obj=>{
 	obj.traverse(n=>{
 		if(n.isMesh){
 			n.material = new THREE.MeshStandardMaterial({
-				color:0x5a141d,          // brighter but same hue family
-				roughness:.65,           // catches light better
+				color:0x5a141d,
+				roughness:.65,
 				metalness:.08,
-				emissive:0x2a060b,       // subtle self-illumination
+				emissive:0x2a060b,
 				emissiveIntensity:.35
 			});
-			n.receiveShadow = true;
 		}
 	});
 	obj.scale.setScalar(4);
@@ -114,7 +113,6 @@ scene.add(trails);
 
 function makePlayer(){
 	const g = new THREE.Group();
-
 	const body = new THREE.Mesh(
 		new THREE.SphereGeometry(10,24,24),
 		new THREE.MeshStandardMaterial({
@@ -123,7 +121,6 @@ function makePlayer(){
 			emissiveIntensity:.7
 		})
 	);
-
 	const camDir = new THREE.Mesh(
 		new THREE.ConeGeometry(18,70,32),
 		new THREE.MeshBasicMaterial({
@@ -171,6 +168,8 @@ function addTrail(pos){
 }
 
 /* ================= UPDATE ================= */
+let follow=null;
+
 async function updatePlayers(){
 	const data = await fetch("/map").then(r=>r.json());
 	ui.innerHTML="<b>Tributes</b>";
@@ -205,19 +204,56 @@ async function updatePlayers(){
 }
 setInterval(updatePlayers,200);
 
-/* ================= CAMERA ================= */
-let follow=null;
-const cam={yaw:0,pitch:0};
+/* ================= CAMERA CONTROLS ================= */
+const cam = {
+	yaw:0,
+	pitch:0,
+	velocity:new THREE.Vector3(),
+	accel:2.4,
+	damping:0.88,
+	baseSpeed:18,
+	boost:3.0,
+	slow:0.25
+};
 
-renderer.domElement.addEventListener("mousedown",()=>{
-	renderer.domElement.requestPointerLock();
+const keys = { w:false,a:false,s:false,d:false,shift:false,ctrl:false };
+let rotating=false;
+
+/* Mouse */
+renderer.domElement.addEventListener("mousedown",e=>{
+	if(e.button===0){
+		rotating=true;
+		renderer.domElement.requestPointerLock();
+	}
+});
+addEventListener("mouseup",()=>{
+	rotating=false;
+	document.exitPointerLock();
+});
+addEventListener("mousemove",e=>{
+	if(rotating && document.pointerLockElement){
+		cam.yaw   -= e.movementX*0.002;
+		cam.pitch = Math.max(-1.4,Math.min(1.4,cam.pitch-e.movementY*0.002));
+	}
 });
 
-addEventListener("mousemove",e=>{
-	if(document.pointerLockElement){
-		cam.yaw -= e.movementX*.002;
-		cam.pitch = Math.max(-1.4,Math.min(1.4,cam.pitch-e.movementY*.002));
-	}
+/* Keyboard */
+addEventListener("keydown",e=>{
+	if(e.code==="KeyW")keys.w=true;
+	if(e.code==="KeyA")keys.a=true;
+	if(e.code==="KeyS")keys.s=true;
+	if(e.code==="KeyD")keys.d=true;
+	if(e.code==="ShiftLeft")keys.shift=true;
+	if(e.code==="ControlLeft")keys.ctrl=true;
+	if("KeyWKeyAKeySKeyD".includes(e.code)) follow=null;
+});
+addEventListener("keyup",e=>{
+	if(e.code==="KeyW")keys.w=false;
+	if(e.code==="KeyA")keys.a=false;
+	if(e.code==="KeyS")keys.s=false;
+	if(e.code==="KeyD")keys.d=false;
+	if(e.code==="ShiftLeft")keys.shift=false;
+	if(e.code==="ControlLeft")keys.ctrl=false;
 });
 
 /* ================= POST FX ================= */
@@ -242,7 +278,6 @@ varying vec2 vUv;
 uniform sampler2D tColor,tDepth;
 uniform vec2 res;
 uniform float near,far;
-
 float lin(float d){
 	float z=d*2.-1.;
 	return (2.*near*far)/(far+near-z*(far-near));
@@ -268,10 +303,26 @@ function animate(){
 	camera.rotation.y=cam.yaw;
 	camera.rotation.x=cam.pitch;
 
+	const forward = new THREE.Vector3(0,0,-1).applyEuler(camera.rotation);
+	const right   = new THREE.Vector3(1,0,0).applyEuler(camera.rotation);
+
+	let mult = cam.baseSpeed;
+	if(keys.shift) mult*=cam.boost;
+	if(keys.ctrl)  mult*=cam.slow;
+
+	if(keys.w) cam.velocity.addScaledVector(forward, cam.accel*mult);
+	if(keys.s) cam.velocity.addScaledVector(forward,-cam.accel*mult);
+	if(keys.a) cam.velocity.addScaledVector(right,  -cam.accel*mult);
+	if(keys.d) cam.velocity.addScaledVector(right,   cam.accel*mult);
+
+	cam.velocity.multiplyScalar(cam.damping);
+	camera.position.add(cam.velocity);
+
 	if(follow){
-		const t=follow.position.clone();
-		const off=new THREE.Vector3(0,140,-320).applyEuler(camera.rotation);
+		const t = follow.position.clone();
+		const off = new THREE.Vector3(0,140,-320).applyEuler(camera.rotation);
 		camera.position.lerp(t.add(off),.08);
+		cam.velocity.set(0,0,0);
 	}
 
 	renderer.setRenderTarget(rt);
