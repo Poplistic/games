@@ -225,7 +225,7 @@ addEventListener("keydown",e=>{
 	if(e.code==="KeyS")keys.s=true;
 	if(e.code==="KeyD")keys.d=true;
 	if(e.code==="ShiftLeft")keys.shift=true;
-	if(e.code==="ControlLeft")keys.ctrl=true;
+	if(e.code==="KeyZ")keys.z=true;
 	if("KeyWKeyAKeySKeyD".includes(e.code)) follow=null;
 });
 addEventListener("keyup",e=>{
@@ -234,7 +234,7 @@ addEventListener("keyup",e=>{
 	if(e.code==="KeyS")keys.s=false;
 	if(e.code==="KeyD")keys.d=false;
 	if(e.code==="ShiftLeft")keys.shift=false;
-	if(e.code==="ControlLeft")keys.ctrl=false;
+	if(e.code==="KeyZ")keys.z=false;
 });
 
 /* ================= POST FX ================= */
@@ -289,7 +289,7 @@ function animate(){
 
 	let mult = cam.baseSpeed;
 	if(keys.shift) mult*=cam.boost;
-	if(keys.ctrl)  mult*=cam.slow;
+	if(keys.z)  mult*=cam.slow;
 
 	if(keys.w) cam.velocity.addScaledVector(forward, cam.accel*mult);
 	if(keys.s) cam.velocity.addScaledVector(forward,-cam.accel*mult);
