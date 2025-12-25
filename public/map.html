@@ -21,6 +21,14 @@
 		font-size:12px;
 	}
 
+	.name {
+		cursor:pointer;
+		padding:2px 0;
+	}
+	.name:hover {
+		color:#ffd700;
+	}
+
 	#log.fade div { opacity:0; transition:opacity 1s }
 </style>
 
@@ -38,7 +46,6 @@
 
 <script type="module">
 import * as THREE from "three";
-import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
 
 /* ======================
    SCENE
@@ -52,11 +59,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x050508);
 
 const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 20000);
-camera.position.set(0,1500,2000);
-
-/* Disable manual control */
-const controls = new OrbitControls(camera, renderer.domElement);
-controls.enabled = false;
+camera.position.set(0,1200,1800);
 
 /* ======================
    LIGHTING
@@ -145,7 +148,7 @@ function makePlayer(){
 ====================== */
 let spectating = null;
 
-/* Click to spectate */
+/* Click mesh to spectate */
 addEventListener("pointerdown",e=>{
 	const mouse = new THREE.Vector2(
 		(e.clientX/innerWidth)*2-1,
@@ -163,8 +166,18 @@ addEventListener("pointerdown",e=>{
 async function updatePlayers(){
 	const data = await fetch("/map").then(r=>r.json());
 
-	tributeUI.innerHTML =
-		"<b>Tributes</b><br>" + data.map(p=>p.name).join("<br>");
+	/* Tribute list (CLICKABLE) */
+	tributeUI.innerHTML = "<b>Tributes</b><br>";
+	for(const p of data){
+		const div = document.createElement("div");
+		div.className = "name";
+		div.textContent = p.name;
+		div.onclick = () => {
+			const m = players.get(p.id);
+			if(m) spectating = m;
+		};
+		tributeUI.appendChild(div);
+	}
 
 	const alive = new Set();
 
@@ -217,17 +230,19 @@ function animate(){
 		m.children[0].rotation.y = u.lookAngle;
 	}
 
-	/* Automatic first-person spectate */
+	/* Automatic third-person spectate */
 	if(spectating){
 		const u = spectating.userData;
 
-		const eye = spectating.position.clone().add(new THREE.Vector3(0,80,0));
-		camera.position.lerp(eye,0.35);
+		const offset = new THREE.Vector3(
+			Math.sin(u.lookAngle) * -700,
+			450,
+			Math.cos(u.lookAngle) * -700
+		);
 
-		const quat = new THREE.Quaternion()
-			.setFromAxisAngle(new THREE.Vector3(0,1,0), u.lookAngle);
-
-		camera.quaternion.slerp(quat,0.35);
+		const camTarget = spectating.position.clone().add(offset);
+		camera.position.lerp(camTarget,0.08);
+		camera.lookAt(spectating.position.clone().add(new THREE.Vector3(0,120,0)));
 	}
 
 	renderer.render(scene,camera);
