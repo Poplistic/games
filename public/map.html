@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>HG Arena — Cinematic Scanner</title>
+<title>HG Arena – Roblox Lighting Sync</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <style>
@@ -12,7 +12,6 @@
 		height: 100%;
 		overflow: hidden;
 		background: #02030a;
-		font-family: system-ui, sans-serif;
 	}
 	canvas { display: block; }
 </style>
@@ -33,8 +32,8 @@ import * as THREE from "three";
 import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
 import { EffectComposer } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { ShaderPass } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/ShaderPass.js";
+import { UnrealBloomPass } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OBJLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/OBJLoader.js";
 
 /* ======================
@@ -47,6 +46,8 @@ renderer.setPixelRatio(devicePixelRatio);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
+const depthTexture = new THREE.DepthTexture();
+
 /* ======================
    SCENE / CAMERA
 ====================== */
@@ -58,36 +59,47 @@ const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 9000
 camera.position.set(1800, 1400, 1800);
 
 /* ======================
-   SKY
+   ROBLOX SKY
 ====================== */
 
-const sky = new THREE.Mesh(
+const skyMat = new THREE.ShaderMaterial({
+	side: THREE.BackSide,
+	uniforms: {
+		sunY: { value: 1 },
+		topDay: { value: new THREE.Color(0x87ceeb) },
+		horizonDay: { value: new THREE.Color(0xffcc88) },
+		topNight: { value: new THREE.Color(0x02030a) },
+		horizonNight: { value: new THREE.Color(0x050914) }
+	},
+	vertexShader: `
+		varying vec3 vPos;
+		void main() {
+			vPos = position;
+			gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+		}
+	`,
+	fragmentShader: `
+		uniform float sunY;
+		uniform vec3 topDay;
+		uniform vec3 horizonDay;
+		uniform vec3 topNight;
+		uniform vec3 horizonNight;
+		varying vec3 vPos;
+
+		void main() {
+			float h = normalize(vPos).y * 0.5 + 0.5;
+			float day = clamp(sunY * 0.5 + 0.5, 0.0, 1.0);
+			vec3 top = mix(topNight, topDay, day);
+			vec3 horizon = mix(horizonNight, horizonDay, day);
+			gl_FragColor = vec4(mix(horizon, top, h), 1.0);
+		}
+	`
+});
+
+scene.add(new THREE.Mesh(
 	new THREE.SphereGeometry(8000, 32, 32),
-	new THREE.ShaderMaterial({
-		side: THREE.BackSide,
-		uniforms: {
-			top: { value: new THREE.Color(0x0b1d4a) },
-			bottom: { value: new THREE.Color(0x02030a) }
-		},
-		vertexShader: `
-			varying vec3 vPos;
-			void main() {
-				vPos = position;
-				gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
-			}
-		`,
-		fragmentShader: `
-			uniform vec3 top;
-			uniform vec3 bottom;
-			varying vec3 vPos;
-			void main() {
-				float h = normalize(vPos).y * 0.5 + 0.5;
-				gl_FragColor = vec4(mix(bottom, top, h), 1.0);
-			}
-		`
-	})
-);
-scene.add(sky);
+	skyMat
+));
 
 /* ======================
    CONTROLS
@@ -95,16 +107,14 @@ scene.add(sky);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
-controls.dampingFactor = 0.06;
 
 /* ======================
    LIGHTING
 ====================== */
 
-scene.add(new THREE.AmbientLight(0x223366, 0.5));
+scene.add(new THREE.AmbientLight(0x223366, 0.45));
 
-const sun = new THREE.DirectionalLight(0x99ccff, 1.6);
-sun.position.set(1200, 2000, 900);
+const sun = new THREE.DirectionalLight(0x99ccff, 1.8);
 scene.add(sun);
 
 /* ======================
@@ -125,131 +135,121 @@ new OBJLoader().load("./arena.obj", obj => {
 });
 
 /* ======================
+   ROBLOX LIGHTING STATE
+====================== */
+
+let lighting = {
+	clockTime: 12,
+	fogColor: [5, 9, 20],
+	fogDensity: 0.00035
+};
+
+async function updateLighting() {
+	try {
+		lighting = await fetch("/lighting").then(r => r.json());
+	} catch {}
+}
+setInterval(updateLighting, 1000);
+
+/* ======================
+   SUN FROM CLOCKTIME
+====================== */
+
+function sunFromClockTime(clockTime) {
+	const angle = (clockTime / 24) * Math.PI * 2 - Math.PI / 2;
+	return new THREE.Vector3(
+		Math.cos(angle),
+		Math.sin(angle),
+		0.35
+	).normalize();
+}
+
+/* ======================
+   TRUE VOLUMETRIC GOD RAYS
+====================== */
+
+const GodRayPass = new ShaderPass({
+	uniforms: {
+		tDiffuse: { value: null },
+		tDepth: { value: depthTexture },
+		cameraNear: { value: camera.near },
+		cameraFar: { value: camera.far },
+		lightDir: { value: new THREE.Vector3() }
+	},
+	vertexShader: `
+		varying vec2 vUv;
+		void main() {
+			vUv = uv;
+			gl_Position = vec4(position.xy,0.0,1.0);
+		}
+	`,
+	fragmentShader: `
+		#include <packing>
+		uniform sampler2D tDiffuse;
+		uniform sampler2D tDepth;
+		uniform float cameraNear;
+		uniform float cameraFar;
+		uniform vec3 lightDir;
+		varying vec2 vUv;
+
+		float readDepth(vec2 uv) {
+			float z = texture2D(tDepth, uv).x;
+			return perspectiveDepthToViewZ(z, cameraNear, cameraFar);
+		}
+
+		void main() {
+			vec3 base = texture2D(tDiffuse, vUv).rgb;
+			float depth = -readDepth(vUv);
+			vec3 col = vec3(0.0);
+
+			float stepSize = depth / 32.0;
+			for (int i = 0; i < 32; i++) {
+				float t = float(i) * stepSize;
+				float fog = exp(-t * 0.002);
+				col += vec3(0.4,0.6,1.0) * fog * 0.02;
+			}
+
+			gl_FragColor = vec4(base + col, 1.0);
+		}
+	`
+});
+
+/* ======================
    POSTPROCESS
 ====================== */
 
 const composer = new EffectComposer(renderer);
-composer.addPass(new RenderPass(scene, camera));
+composer.renderTarget1.depthTexture = depthTexture;
+composer.renderTarget2.depthTexture = depthTexture;
 
+composer.addPass(new RenderPass(scene, camera));
 composer.addPass(new UnrealBloomPass(
 	new THREE.Vector2(innerWidth, innerHeight),
-	1.1,
-	0.55,
-	0.15
+	1.1, 0.55, 0.15
 ));
-
-/* ======================
-   COLOR GRADING (LUT-LIKE)
-====================== */
-
-const ColorGradePass = new ShaderPass({
-	uniforms: { tDiffuse: { value: null } },
-	vertexShader: `
-		varying vec2 vUv;
-		void main() {
-			vUv = uv;
-			gl_Position = vec4(position.xy,0.0,1.0);
-		}
-	`,
-	fragmentShader: `
-		uniform sampler2D tDiffuse;
-		varying vec2 vUv;
-
-		vec3 filmic(vec3 c) {
-			c = max(vec3(0.0), c - 0.004);
-			return (c * (6.2*c + 0.5)) / (c * (6.2*c + 1.7) + 0.06);
-		}
-
-		void main() {
-			vec3 col = texture2D(tDiffuse, vUv).rgb;
-
-			col = mix(col, vec3(dot(col, vec3(0.333))), 0.08);
-			col.r += 0.02;
-			col.b -= 0.02;
-
-			col = filmic(col);
-			gl_FragColor = vec4(col,1.0);
-		}
-	`
-});
-composer.addPass(ColorGradePass);
-
-/* ======================
-   SCANLINES
-====================== */
-
-const ScanlinePass = new ShaderPass({
-	uniforms: {
-		tDiffuse: { value: null },
-		time: { value: 0 }
-	},
-	vertexShader: `
-		varying vec2 vUv;
-		void main() {
-			vUv = uv;
-			gl_Position = vec4(position.xy,0.0,1.0);
-		}
-	`,
-	fragmentShader: `
-		uniform sampler2D tDiffuse;
-		uniform float time;
-		varying vec2 vUv;
-
-		void main() {
-			vec3 col = texture2D(tDiffuse, vUv).rgb;
-			float scan = sin((vUv.y + time*0.02) * 900.0) * 0.04;
-			col -= scan;
-			gl_FragColor = vec4(col,1.0);
-		}
-	`
-});
-composer.addPass(ScanlinePass);
-
-/* ======================
-   FILM GRAIN
-====================== */
-
-const GrainPass = new ShaderPass({
-	uniforms: {
-		tDiffuse: { value: null },
-		time: { value: 0 }
-	},
-	vertexShader: `
-		varying vec2 vUv;
-		void main() {
-			vUv = uv;
-			gl_Position = vec4(position.xy,0.0,1.0);
-		}
-	`,
-	fragmentShader: `
-		uniform sampler2D tDiffuse;
-		uniform float time;
-		varying vec2 vUv;
-
-		float rand(vec2 co){
-			return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
-		}
-
-		void main() {
-			vec3 col = texture2D(tDiffuse, vUv).rgb;
-			float g = rand(vUv + time) * 0.035;
-			col += g;
-			gl_FragColor = vec4(col,1.0);
-		}
-	`
-});
-composer.addPass(GrainPass);
+composer.addPass(GodRayPass);
 
 /* ======================
    ANIMATE
 ====================== */
 
-function animate(t) {
+function animate() {
 	requestAnimationFrame(animate);
 	controls.update();
 
-	ScanlinePass.uniforms.time.value = t * 0.001;
-	GrainPass.uniforms.time.value = t * 0.001;
+	const sunDir = sunFromClockTime(lighting.clockTime);
+
+	sun.position.copy(sunDir).multiplyScalar(3000);
+	skyMat.uniforms.sunY.value = sunDir.y;
+
+	scene.fog.color.setRGB(
+		lighting.fogColor[0] / 255,
+		lighting.fogColor[1] / 255,
+		lighting.fogColor[2] / 255
+	);
+	scene.fog.density = lighting.fogDensity;
+
+	GodRayPass.uniforms.lightDir.value.copy(sunDir);
 
 	composer.render();
 }
