@@ -1,6 +1,7 @@
 <script type="module">
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js";
 import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+import { CSS2DRenderer, CSS2DObject } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/renderers/CSS2DRenderer.js";
 import { Sky } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/objects/Sky.js";
 
 /* ======================
@@ -9,21 +10,31 @@ import { Sky } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/obj
 
 const DOT_RADIUS = 5;
 const HITBOX_RADIUS = 40;
-const PREDICTION_TIME = 0.15; // seconds
-const TRACK_ZOOM = 900;
-const FREE_ZOOM = 2600;
+const PREDICTION_TIME = 0.15;
+
+const CAM_MODES = {
+	FREE: "free",
+	OVERHEAD: "overhead",
+	BEHIND: "behind"
+};
+
+let camMode = CAM_MODES.FREE;
 
 /* ======================
-   RENDERER
+   RENDERERS
 ====================== */
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(devicePixelRatio);
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
 document.body.appendChild(renderer.domElement);
+
+const labelRenderer = new CSS2DRenderer();
+labelRenderer.setSize(innerWidth, innerHeight);
+labelRenderer.domElement.style.position = "absolute";
+labelRenderer.domElement.style.top = "0";
+labelRenderer.domElement.style.pointerEvents = "none";
+document.body.appendChild(labelRenderer.domElement);
 
 /* ======================
    SCENE / CAMERA
@@ -47,8 +58,6 @@ scene.add(sky);
 const sun = new THREE.Vector3();
 sky.material.uniforms.turbidity.value = 10;
 sky.material.uniforms.rayleigh.value = 2;
-sky.material.uniforms.mieCoefficient.value = 0.005;
-sky.material.uniforms.mieDirectionalG.value = 0.8;
 
 const dirLight = new THREE.DirectionalLight(0xffffff, 3);
 scene.add(dirLight);
@@ -61,48 +70,43 @@ scene.add(new THREE.AmbientLight(0x404060, 0.4));
 const playerGroup = new THREE.Group();
 scene.add(playerGroup);
 
-function makeMarker() {
+function makeMarker(name) {
 	const g = new THREE.Group();
 
-	// Dot
 	const dot = new THREE.Mesh(
 		new THREE.SphereGeometry(DOT_RADIUS, 16, 16),
 		new THREE.MeshBasicMaterial({ color: 0x00ff00 })
 	);
 	g.add(dot);
 
-	// Highlight ring
-	const ring = new THREE.Mesh(
-		new THREE.RingGeometry(10, 14, 32),
-		new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0 })
-	);
-	ring.rotation.x = -Math.PI / 2;
-	g.add(ring);
-
-	// Direction arrow
-	const arrow = new THREE.ArrowHelper(
-		new THREE.Vector3(0, 0, 1),
-		new THREE.Vector3(0, 0, 0),
-		80,
-		0x00ffff
-	);
-	arrow.visible = false;
-	g.add(arrow);
-
-	// Hitbox
 	const hitbox = new THREE.Mesh(
-		new THREE.SphereGeometry(HITBOX_RADIUS, 16, 16),
+		new THREE.SphereGeometry(HITBOX_RADIUS),
 		new THREE.MeshBasicMaterial({ transparent: true, opacity: 0 })
 	);
 	g.add(hitbox);
 
+	// Label
+	const div = document.createElement("div");
+	div.style.color = "#0ff";
+	div.style.fontSize = "14px";
+	div.style.fontWeight = "bold";
+	div.style.whiteSpace = "nowrap";
+	div.style.textShadow = "0 0 4px black";
+	div.innerText = name;
+
+	const label = new CSS2DObject(div);
+	label.position.set(0, 25, 0);
+	label.visible = false;
+	g.add(label);
+
 	g.userData = {
 		dot,
-		ring,
-		arrow,
 		hitbox,
+		label,
+		name,
 		lastPos: null,
-		velocity: new THREE.Vector3()
+		velocity: new THREE.Vector3(),
+		look: new THREE.Vector3(0, 0, 1)
 	};
 
 	return g;
@@ -112,24 +116,52 @@ const markers = new Map();
 let tracked = null;
 
 /* ======================
+   TRIBUTE LIST UI
+====================== */
+
+const list = document.createElement("div");
+list.style.position = "absolute";
+list.style.top = "10px";
+list.style.right = "10px";
+list.style.background = "rgba(0,0,0,0.6)";
+list.style.padding = "10px";
+list.style.borderRadius = "8px";
+list.style.color = "white";
+list.style.fontFamily = "sans-serif";
+list.style.maxHeight = "60vh";
+list.style.overflowY = "auto";
+document.body.appendChild(list);
+
+function updateTributeList() {
+	list.innerHTML = "<b>Tributes</b><br>";
+	markers.forEach((m) => {
+		const row = document.createElement("div");
+		row.innerText = m.userData.name;
+		row.style.cursor = "pointer";
+		row.style.color = m === tracked ? "#0ff" : "#fff";
+		row.onclick = () => tracked = m;
+		list.appendChild(row);
+	});
+}
+
+/* ======================
    UPDATE PLAYERS
 ====================== */
 
-function updatePlayers(list) {
+function updatePlayers(data) {
 	const seen = new Set();
 
-	for (const p of list) {
+	for (const p of data) {
 		seen.add(p.id);
 
 		if (!markers.has(p.id)) {
-			const m = makeMarker();
+			const m = makeMarker(p.name);
 			playerGroup.add(m);
 			markers.set(p.id, m);
 		}
 
 		const m = markers.get(p.id);
 		const now = performance.now() / 1000;
-
 		const pos = new THREE.Vector3(p.x, 20, p.z);
 
 		if (m.userData.lastPos) {
@@ -139,19 +171,13 @@ function updatePlayers(list) {
 
 		m.userData.lastPos = pos.clone();
 		m.userData.lastTime = now;
+		m.userData.look.set(p.lookX ?? 0, 0, p.lookZ ?? 1).normalize();
 
 		const predicted = pos.clone().add(
 			m.userData.velocity.clone().multiplyScalar(PREDICTION_TIME)
 		);
 
 		m.position.lerp(predicted, 0.5);
-
-		// Direction arrow
-		if (p.lookX !== undefined) {
-			m.userData.arrow.setDirection(
-				new THREE.Vector3(p.lookX, 0, p.lookZ).normalize()
-			);
-		}
 	}
 
 	for (const [id, m] of markers) {
@@ -160,91 +186,90 @@ function updatePlayers(list) {
 			markers.delete(id);
 		}
 	}
+
+	updateTributeList();
 }
 
 /* ======================
    FETCH LOOP
 ====================== */
 
-let lighting = null;
-
 setInterval(async () => {
 	updatePlayers(await fetch("/map").then(r => r.json()));
-	lighting = await fetch("/lighting").then(r => r.json());
 }, 200);
 
 /* ======================
-   CLICK / TOUCH
+   CAMERA MODES
+====================== */
+
+window.addEventListener("keydown", e => {
+	if (e.key === "1") camMode = CAM_MODES.FREE;
+	if (e.key === "2") camMode = CAM_MODES.OVERHEAD;
+	if (e.key === "3") camMode = CAM_MODES.BEHIND;
+});
+
+/* ======================
+   CLICK PICKING
 ====================== */
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 
-function pick(event) {
+renderer.domElement.addEventListener("click", e => {
 	const rect = renderer.domElement.getBoundingClientRect();
-	const e = event.touches ? event.touches[0] : event;
-
 	pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
 	pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
 
 	raycaster.setFromCamera(pointer, camera);
-
-	const hitboxes = [];
-	markers.forEach(m => hitboxes.push(m.userData.hitbox));
-
+	const hitboxes = [...markers.values()].map(m => m.userData.hitbox);
 	const hits = raycaster.intersectObjects(hitboxes);
 
-	if (hits.length) {
-		tracked = hits[0].object.parent;
-	} else {
-		tracked = null;
-	}
-}
-
-renderer.domElement.addEventListener("click", pick);
-renderer.domElement.addEventListener("touchstart", pick, { passive: true });
+	tracked = hits.length ? hits[0].object.parent : null;
+});
 
 /* ======================
-   ANIMATION LOOP
+   ANIMATE
 ====================== */
 
 function animate() {
 	requestAnimationFrame(animate);
 
-	if (lighting) {
-		sun.set(...lighting.sunDirection);
-		sky.material.uniforms.sunPosition.value.copy(sun.multiplyScalar(5000));
-		dirLight.position.copy(sun);
-		dirLight.intensity = lighting.brightness * 1.2;
-	}
-
-	// Marker visuals
 	markers.forEach(m => {
 		const selected = m === tracked;
 		m.userData.dot.material.color.set(selected ? 0x00ffff : 0x00ff00);
-		m.userData.arrow.visible = selected;
+		m.userData.label.visible = selected;
 
-		m.userData.ring.material.opacity = selected
-			? 0.5 + Math.sin(performance.now() * 0.005) * 0.25
-			: 0;
+		if (selected) {
+			const dist = camera.position.distanceTo(m.position);
+			m.userData.label.element.innerText =
+				`${m.userData.name} (${Math.floor(dist)} studs)`;
+		}
 	});
 
-	// Camera tracking + zoom
 	if (tracked) {
-		controls.target.lerp(tracked.position, 0.1);
-		camera.position.lerp(
-			tracked.position.clone().add(new THREE.Vector3(0, TRACK_ZOOM, TRACK_ZOOM)),
-			0.05
-		);
-	} else {
-		camera.position.lerp(
-			new THREE.Vector3(2000, FREE_ZOOM, 2000),
-			0.02
-		);
+		if (camMode === CAM_MODES.OVERHEAD) {
+			camera.position.lerp(
+				tracked.position.clone().add(new THREE.Vector3(0, 1200, 0)),
+				0.1
+			);
+			controls.target.lerp(tracked.position, 0.1);
+		}
+
+		if (camMode === CAM_MODES.BEHIND) {
+			const behind = tracked.userData.look.clone().multiplyScalar(-600);
+			camera.position.lerp(
+				tracked.position.clone().add(behind).add(new THREE.Vector3(0, 200, 0)),
+				0.1
+			);
+			controls.target.lerp(tracked.position, 0.1);
+		}
 	}
 
+	controls.enabled = camMode === CAM_MODES.FREE;
 	controls.update();
+
 	renderer.render(scene, camera);
+	labelRenderer.render(scene, camera);
 }
 
 animate();
