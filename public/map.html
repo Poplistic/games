@@ -14,8 +14,6 @@ html,body{
 	background:radial-gradient(circle at 50% 15%, #160406, #020001);
 	font-family:system-ui,Segoe UI,sans-serif;
 }
-
-/* ================= HUD ================= */
 #hud{
 	position:fixed;
 	top:16px;
@@ -47,52 +45,6 @@ html,body{
 .name:hover{
 	background:rgba(255,120,140,.28);
 }
-
-/* ================= MOBILE STICKS ================= */
-.mobile-controls{
-	position:fixed;
-	inset:0;
-	pointer-events:none;
-	z-index:20;
-	opacity:0;
-	transition:opacity .35s ease;
-}
-
-.mobile-controls.active{
-	opacity:1;
-	pointer-events:auto;
-}
-
-.stick{
-	position:absolute;
-	width:140px;
-	height:140px;
-	border-radius:50%;
-	background:radial-gradient(circle, rgba(255,120,140,.35), rgba(80,10,20,.55));
-	border:1px solid rgba(255,140,160,.45);
-	backdrop-filter:blur(10px);
-	touch-action:none;
-}
-
-.stick.left{ left:28px; bottom:28px; }
-.stick.right{ right:28px; bottom:28px; }
-
-.stick::after{
-	content:"";
-	position:absolute;
-	left:50%;
-	top:50%;
-	width:56px;
-	height:56px;
-	margin:-28px;
-	border-radius:50%;
-	background:rgba(255,160,175,.8);
-}
-
-/* HARD desktop kill */
-@media (hover:hover) and (pointer:fine){
-	.mobile-controls{ display:none !important; }
-}
 </style>
 
 <script type="importmap">
@@ -107,34 +59,9 @@ html,body{
 <body>
 <div id="hud"><div class="ui" id="ui"></div></div>
 
-<div class="mobile-controls" id="mobileControls">
-	<div class="stick left"  id="leftStick"></div>
-	<div class="stick right" id="rightStick"></div>
-</div>
-
 <script type="module">
 import * as THREE from "three";
 import { OBJLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/OBJLoader.js";
-
-/* ================= DEVICE MODE ================= */
-let usingTouch = false;
-const mobileUI = document.getElementById("mobileControls");
-
-function setTouchMode(state){
-	usingTouch = state;
-	mobileUI.classList.toggle("active", state);
-}
-
-function detectInitial(){
-	if (matchMedia("(pointer:coarse)").matches) setTouchMode(true);
-}
-detectInitial();
-
-/* auto switch */
-addEventListener("pointerdown", e=>{
-	if(e.pointerType === "touch") setTouchMode(true);
-	else setTouchMode(false);
-});
 
 /* ================= RENDERER ================= */
 const renderer = new THREE.WebGLRenderer({ antialias:true });
@@ -258,80 +185,137 @@ async function updatePlayers(){
 }
 setInterval(updatePlayers,200);
 
-/* ================= CAMERA ================= */
+/* ================= CAMERA CONTROLS ================= */
 const cam = {
 	yaw:0,
 	pitch:0,
 	velocity:new THREE.Vector3(),
-	accel:2.2,
+	accel:2.4,
 	damping:0.88,
-	baseSpeed:16
+	baseSpeed:18,
+	boost:3.0,
 };
 
-/* ================= TOUCH STICKS ================= */
-const stickState = {
-	move:new THREE.Vector2(),
-	look:new THREE.Vector2()
-};
+const keys = { w:false,a:false,s:false,d:false,shift:false };
+let rotating=false;
 
-function bindStick(el, target){
-	let id=null,start=null;
+/* Mouse */
+renderer.domElement.addEventListener("mousedown",e=>{
+	if(e.button===0){
+		rotating=true;
+		renderer.domElement.requestPointerLock();
+	}
+});
+addEventListener("mouseup",()=>{
+	rotating=false;
+	document.exitPointerLock();
+});
+addEventListener("mousemove",e=>{
+	if(rotating && document.pointerLockElement){
+		cam.yaw   -= e.movementX*0.002;
+		cam.pitch = Math.max(-1.4,Math.min(1.4,cam.pitch-e.movementY*0.002));
+	}
+});
 
-	el.addEventListener("pointerdown",e=>{
-		if(e.pointerType!=="touch") return;
-		id=e.pointerId;
-		start={x:e.clientX,y:e.clientY};
-		el.setPointerCapture(id);
-	});
-	el.addEventListener("pointermove",e=>{
-		if(e.pointerId!==id) return;
-		const dx=(e.clientX-start.x)/60;
-		const dy=(e.clientY-start.y)/60;
-		target.set(
-			Math.max(-1,Math.min(1,dx)),
-			Math.max(-1,Math.min(1,dy))
-		);
-	});
-	el.addEventListener("pointerup",()=>{
-		id=null;
-		target.set(0,0);
-	});
+/* Keyboard */
+addEventListener("keydown",e=>{
+	if(e.code==="KeyW")keys.w=true;
+	if(e.code==="KeyA")keys.a=true;
+	if(e.code==="KeyS")keys.s=true;
+	if(e.code==="KeyD")keys.d=true;
+	if(e.code==="ShiftLeft")keys.shift=true;
+	if("KeyWKeyAKeySKeyD".includes(e.code)) follow=null;
+});
+addEventListener("keyup",e=>{
+	if(e.code==="KeyW")keys.w=false;
+	if(e.code==="KeyA")keys.a=false;
+	if(e.code==="KeyS")keys.s=false;
+	if(e.code==="KeyD")keys.d=false;
+	if(e.code==="ShiftLeft")keys.shift=false;
+});
+
+/* ================= POST FX ================= */
+const rt = new THREE.WebGLRenderTarget(innerWidth,innerHeight);
+rt.depthTexture = new THREE.DepthTexture();
+
+const postScene = new THREE.Scene();
+const postCam = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
+
+const postMat = new THREE.ShaderMaterial({
+	uniforms:{
+		tColor:{value:rt.texture},
+		tDepth:{value:rt.depthTexture},
+		res:{value:new THREE.Vector2(innerWidth,innerHeight)},
+		near:{value:camera.near},
+		far:{value:camera.far}
+	},
+	vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position.xy,0,1);}`,
+	fragmentShader:`
+precision highp float;
+varying vec2 vUv;
+uniform sampler2D tColor,tDepth;
+uniform vec2 res;
+uniform float near,far;
+float lin(float d){
+	float z=d*2.-1.;
+	return (2.*near*far)/(far+near-z*(far-near));
 }
-
-bindStick(leftStick,stickState.move);
-bindStick(rightStick,stickState.look);
+void main(){
+	vec3 col=texture2D(tColor,vUv).rgb;
+	float d=lin(texture2D(tDepth,vUv).r)/far;
+	vec2 px=1./res;
+	float e=abs(d-lin(texture2D(tDepth,vUv+vec2(px.x,0)).r)/far)
+	       +abs(d-lin(texture2D(tDepth,vUv+vec2(0,px.y)).r)/far);
+	col+=e*vec3(1.,.3,.4);
+	col=mix(col,vec3(.18,.02,.04),smoothstep(.25,.9,d));
+	gl_FragColor=vec4(col,1.);
+}`
+});
+postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),postMat));
 
 /* ================= LOOP ================= */
 function animate(){
 	requestAnimationFrame(animate);
 
-	if(usingTouch){
-		cam.yaw   -= stickState.look.x*0.05;
-		cam.pitch = Math.max(-1.4,Math.min(1.4,cam.pitch-stickState.look.y*0.05));
-
-		const forward=new THREE.Vector3(0,0,-1).applyEuler(camera.rotation);
-		const right=new THREE.Vector3(1,0,0).applyEuler(camera.rotation);
-
-		cam.velocity
-			.addScaledVector(forward,-stickState.move.y*cam.accel)
-			.addScaledVector(right, stickState.move.x*cam.accel);
-	}
-
-	cam.velocity.multiplyScalar(cam.damping);
-	camera.position.add(cam.velocity);
-
 	camera.rotation.order="YXZ";
 	camera.rotation.y=cam.yaw;
 	camera.rotation.x=cam.pitch;
 
+	const forward = new THREE.Vector3(0,0,-1).applyEuler(camera.rotation);
+	const right   = new THREE.Vector3(1,0,0).applyEuler(camera.rotation);
+
+	let mult = cam.baseSpeed;
+	if(keys.shift) mult*=cam.boost;
+	if(keys.z)  mult*=cam.slow;
+
+	if(keys.w) cam.velocity.addScaledVector(forward, cam.accel*mult);
+	if(keys.s) cam.velocity.addScaledVector(forward,-cam.accel*mult);
+	if(keys.a) cam.velocity.addScaledVector(right,  -cam.accel*mult);
+	if(keys.d) cam.velocity.addScaledVector(right,   cam.accel*mult);
+
+	cam.velocity.multiplyScalar(cam.damping);
+	camera.position.add(cam.velocity);
+
+	if(follow){
+		const t = follow.position.clone();
+		const off = new THREE.Vector3(0,140,-320).applyEuler(camera.rotation);
+		camera.position.lerp(t.add(off),.08);
+		cam.velocity.set(0,0,0);
+	}
+
+	renderer.setRenderTarget(rt);
 	renderer.render(scene,camera);
+	renderer.setRenderTarget(null);
+	renderer.render(postScene,postCam);
 }
 animate();
 
 addEventListener("resize",()=>{
 	renderer.setSize(innerWidth,innerHeight);
+	rt.setSize(innerWidth,innerHeight);
 	camera.aspect=innerWidth/innerHeight;
 	camera.updateProjectionMatrix();
+	postMat.uniforms.res.value.set(innerWidth,innerHeight);
 });
 </script>
 </body>
