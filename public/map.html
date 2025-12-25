@@ -78,7 +78,7 @@ function makePlayer(bustUrl) {
         depthWrite: false
     });
     const plane = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), mat);
-    plane.rotation.x = -Math.PI / 2; // lay flat on floor
+    plane.rotation.x = -Math.PI / 2; // lay flat
     g.add(plane);
     g.userData.plane = plane;
     return g;
@@ -96,13 +96,14 @@ async function updatePlayers(){
 	for(const p of data){
 		alive.add(p.id);
 		if(!players.has(p.id)){
-			const m = makePlayer(p.bustUrl);
+			const bustUrl = `/bust/${p.id}`; // PROXY URL
+			const m = makePlayer(bustUrl);
 			scene.add(m);
 			players.set(p.id,m);
 		}
 		const m = players.get(p.id);
 		m.position.set(p.x,p.y+20,p.z);
-		m.rotation.y=p.yaw;
+		m.rotation.y = p.yaw;
 
 		const d=document.createElement("div");
 		d.className="name";
@@ -215,12 +216,9 @@ function animate(){
 		cam.velocity.set(0,0,0);
 	}
 
-	// Make player planes face camera
-	players.forEach(p=>{
-		p.userData.plane.lookAt(camera.position);
-	});
+	// Player planes face camera
+	players.forEach(p=>p.userData.plane.lookAt(camera.position));
 
-	// Render scene with post FX
 	renderer.setRenderTarget(rt);
 	renderer.render(scene,camera);
 	renderer.setRenderTarget(null);
