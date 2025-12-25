@@ -45,6 +45,22 @@ html,body{
 .name:hover{
 	background:rgba(255,120,140,.28);
 }
+#killFeed{
+	position: fixed;
+	top: 16px;
+	right: 16px;
+	width: 300px;
+	max-height: 400px;
+	overflow-y: auto;
+	font-family: system-ui, sans-serif;
+	font-size: 13px;
+	line-height: 1.4;
+	color: #ffe8ee;
+	backdrop-filter: blur(6px);
+	padding: 12px;
+	border-radius: 10px;
+	background: rgba(20,5,10,0.35);
+}
 </style>
 
 <script type="importmap">
@@ -58,7 +74,9 @@ html,body{
 
 <body>
 <div id="hud"><div class="ui" id="ui"></div></div>
+<div id="killFeed"></div>
 
+<script src="/socket.io/socket.io.js"></script>
 <script type="module">
 import * as THREE from "three";
 import { OBJLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/OBJLoader.js";
@@ -86,6 +104,7 @@ scene.add(sun);
 /* ================= ARENA ================= */
 const arenaGroup = new THREE.Group();
 scene.add(arenaGroup);
+
 new OBJLoader().load("/arena.obj", obj=>{
 	obj.traverse(n=>{
 		if(n.isMesh){
@@ -104,14 +123,13 @@ new OBJLoader().load("/arena.obj", obj=>{
 
 /* ================= UI ================= */
 const ui = document.getElementById("ui");
+const killFeedEl = document.getElementById("killFeed");
 
 /* ================= PLAYERS ================= */
 const players = new Map();
 
 function makePlayer(){
 	const g = new THREE.Group();
-
-	// Sphere body
 	const body = new THREE.Mesh(
 		new THREE.SphereGeometry(10,24,24),
 		new THREE.MeshStandardMaterial({
@@ -122,27 +140,20 @@ function makePlayer(){
 	);
 	g.add(body);
 
-	// Directional line
-	const dirMat = new THREE.LineBasicMaterial({
-		color:0xff6b7a,
-		transparent:true,
-		opacity:0.7
-	});
-	const points = [new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-80)];
-	const dirGeo = new THREE.BufferGeometry().setFromPoints(points);
-	const dirLine = new THREE.Line(dirGeo, dirMat);
-	dirLine.rotation.x = Math.PI/2;
+	// Direction line
+	const lineMat = new THREE.LineBasicMaterial({ color: 0xffa0aa });
+	const points = [new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-50)];
+	const dirLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), lineMat);
 	g.add(dirLine);
-
 	g.userData.dirLine = dirLine;
+
 	return g;
 }
 
-/* ================= UPDATE ================= */
-let follow=null;
+/* ================= UPDATE PLAYERS ================= */
+let follow = null;
 
 async function updatePlayers(){
-	// Fetch live map from server
 	const data = await fetch("/map").then(r=>r.json());
 	ui.innerHTML="<b>Tributes</b>";
 	const alive = new Set();
@@ -157,10 +168,7 @@ async function updatePlayers(){
 		const m = players.get(p.id);
 		m.position.set(p.x,p.y+20,p.z);
 		m.rotation.y = p.yaw;
-
-		if(m.userData.dirLine){
-			m.userData.dirLine.rotation.z = p.pitch;
-		}
+		m.userData.dirLine.rotation.y = p.yaw;
 
 		const d=document.createElement("div");
 		d.className="name";
@@ -177,6 +185,17 @@ async function updatePlayers(){
 }
 setInterval(updatePlayers,200);
 
+/* ================= SOCKET.IO KILL FEED ================= */
+const socket = io();
+socket.on("kill:feed", feed => {
+	killFeedEl.innerHTML = "";
+	feed.forEach(item => {
+		const div = document.createElement("div");
+		div.textContent = item.text;
+		killFeedEl.appendChild(div);
+	});
+});
+
 /* ================= CAMERA CONTROLS ================= */
 const cam = {
 	yaw:0,
@@ -190,19 +209,19 @@ const cam = {
 const keys = { w:false,a:false,s:false,d:false,shift:false };
 let rotating=false;
 
-renderer.domElement.addEventListener("mousedown",e=>{
+renderer.domElement.addEventListener("mousedown", e=>{
 	if(e.button===0){
 		rotating=true;
 		renderer.domElement.requestPointerLock();
 	}
 });
-addEventListener("mouseup",()=>{
+addEventListener("mouseup", ()=>{
 	rotating=false;
 	document.exitPointerLock();
 });
-addEventListener("mousemove",e=>{
+addEventListener("mousemove", e=>{
 	if(rotating && document.pointerLockElement){
-		cam.yaw -= e.movementX*0.002;
+		cam.yaw   -= e.movementX*0.002;
 		cam.pitch = Math.max(-1.4, Math.min(1.4, cam.pitch - e.movementY*0.002));
 	}
 });
@@ -222,68 +241,24 @@ addEventListener("keyup", e=>{
 	if(e.code==="ShiftLeft") keys.shift=false;
 });
 
-/* ================= POST FX ================= */
-const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight);
-rt.depthTexture = new THREE.DepthTexture();
-
-const postScene = new THREE.Scene();
-const postCam = new THREE.OrthographicCamera(-1,1,1,-1,0,1);
-
-const postMat = new THREE.ShaderMaterial({
-	uniforms:{
-		tColor:{value:rt.texture},
-		tDepth:{value:rt.depthTexture},
-		res:{value:new THREE.Vector2(innerWidth,innerHeight)},
-		near:{value:camera.near},
-		far:{value:camera.far},
-		time:{value:0}
-	},
-	vertexShader:`varying vec2 vUv;void main(){vUv=uv;gl_Position=vec4(position.xy,0,1);}`,
-	fragmentShader:`
-precision highp float;
-varying vec2 vUv;
-uniform sampler2D tColor,tDepth;
-uniform vec2 res;
-uniform float near,far;
-uniform float time;
-
-float lin(float d){
-	float z = d*2.0 - 1.0;
-	return (2.0 * near * far) / (far + near - z*(far-near));
-}
-
-void main(){
-	vec3 col = texture2D(tColor,vUv).rgb;
-	float depth = lin(texture2D(tDepth,vUv).r)/far;
-	vec3 fogColor = vec3(0.08,0.02,0.04);
-	col = mix(col, fogColor, smoothstep(0.3, 1.0, depth));
-	vec2 px = 1.0/res;
-	float edge = abs(depth - lin(texture2D(tDepth,vUv + vec2(px.x,0)).r)/far)
-	           + abs(depth - lin(texture2D(tDepth,vUv + vec2(0,px.y)).r)/far);
-	col += edge*vec3(1.0,0.3,0.4);
-	gl_FragColor = vec4(col,1.0);
-}`
-});
-postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2),postMat));
-
 /* ================= LOOP ================= */
 function animate(){
 	requestAnimationFrame(animate);
 
 	camera.rotation.order="YXZ";
-	camera.rotation.y = cam.yaw;
-	camera.rotation.x = cam.pitch;
+	camera.rotation.y=cam.yaw;
+	camera.rotation.x=cam.pitch;
 
 	const forward = new THREE.Vector3(0,0,-1).applyEuler(camera.rotation);
-	const right = new THREE.Vector3(1,0,0).applyEuler(camera.rotation);
+	const right   = new THREE.Vector3(1,0,0).applyEuler(camera.rotation);
 
 	let mult = cam.baseSpeed;
-	if(keys.shift) mult *= cam.boost;
+	if(keys.shift) mult*=cam.boost;
 
 	if(keys.w) cam.velocity.addScaledVector(forward, cam.accel*mult);
-	if(keys.s) cam.velocity.addScaledVector(forward, -cam.accel*mult);
-	if(keys.a) cam.velocity.addScaledVector(right, -cam.accel*mult);
-	if(keys.d) cam.velocity.addScaledVector(right, cam.accel*mult);
+	if(keys.s) cam.velocity.addScaledVector(forward,-cam.accel*mult);
+	if(keys.a) cam.velocity.addScaledVector(right,  -cam.accel*mult);
+	if(keys.d) cam.velocity.addScaledVector(right,   cam.accel*mult);
 
 	cam.velocity.multiplyScalar(cam.damping);
 	camera.position.add(cam.velocity);
@@ -291,25 +266,18 @@ function animate(){
 	if(follow){
 		const t = follow.position.clone();
 		const off = new THREE.Vector3(0,140,-320).applyEuler(camera.rotation);
-		camera.position.lerp(t.add(off),0.08);
+		camera.position.lerp(t.add(off),.08);
 		cam.velocity.set(0,0,0);
 	}
 
-	postMat.uniforms.time.value = performance.now()*0.001;
-
-	renderer.setRenderTarget(rt);
 	renderer.render(scene,camera);
-	renderer.setRenderTarget(null);
-	renderer.render(postScene,postCam);
 }
 animate();
 
-addEventListener("resize",()=>{
+addEventListener("resize", ()=>{
 	renderer.setSize(innerWidth,innerHeight);
-	rt.setSize(innerWidth,innerHeight);
-	camera.aspect = innerWidth/innerHeight;
+	camera.aspect = innerWidth / innerHeight;
 	camera.updateProjectionMatrix();
-	postMat.uniforms.res.value.set(innerWidth,innerHeight);
 });
 </script>
 </body>
