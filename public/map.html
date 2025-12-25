@@ -47,6 +47,7 @@ canvas { display:block }
 
 <script type="module">
 import * as THREE from "three";
+import { OBJLoader } from "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/loaders/OBJLoader.js";
 
 /* ================= RENDERER ================= */
 const renderer = new THREE.WebGLRenderer({ antialias:true });
@@ -59,25 +60,59 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x050001);
 
 /* ================= CAMERA ================= */
-const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 10000);
-camera.position.set(0, 600, 1200);
+const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 20000);
+camera.position.set(0, 800, 1600);
 
-/* ================= LIGHT ================= */
-scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-const sun = new THREE.DirectionalLight(0xffc0cc, 1.2);
-sun.position.set(3000, 4000, 2000);
+/* ================= LIGHTING ================= */
+scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+
+const sun = new THREE.DirectionalLight(0xffc0cc, 1.4);
+sun.position.set(4000, 6000, 3000);
 scene.add(sun);
 
-/* ================= FLOOR ================= */
+/* ================= FALLBACK FLOOR ================= */
 const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(5000, 5000),
+    new THREE.PlaneGeometry(6000, 6000),
     new THREE.MeshStandardMaterial({
-        color: 0x3a0c12,
-        roughness: 0.8
+        color: 0x2a070b,
+        roughness: 0.85
     })
 );
 floor.rotation.x = -Math.PI / 2;
 scene.add(floor);
+
+/* ================= ARENA OBJ ================= */
+const loader = new OBJLoader();
+
+loader.load(
+    "/arena.obj",
+    obj => {
+        obj.traverse(n => {
+            if (n.isMesh) {
+                n.material = new THREE.MeshStandardMaterial({
+                    color: 0x6b1822,
+                    roughness: 0.65,
+                    metalness: 0.05,
+                    emissive: 0x22060a,
+                    emissiveIntensity: 0.35
+                });
+                n.castShadow = false;
+                n.receiveShadow = true;
+            }
+        });
+
+        obj.scale.setScalar(10);      // adjust if needed
+        obj.position.set(0, 0, 0);
+        obj.rotation.y = Math.PI;     // common OBJ orientation fix
+
+        scene.add(obj);
+        console.log("arena.obj loaded");
+    },
+    undefined,
+    err => {
+        console.error("arena.obj failed to load", err);
+    }
+);
 
 /* ================= PLAYERS ================= */
 const players = new Map();
@@ -180,6 +215,7 @@ function animate(){
 }
 animate();
 
+/* ================= RESIZE ================= */
 addEventListener("resize", ()=>{
     renderer.setSize(innerWidth, innerHeight);
     camera.aspect = innerWidth/innerHeight;
