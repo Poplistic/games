@@ -132,9 +132,33 @@ io.on("connection", socket => {
 });
 
 /* ======================
+   DEAD TRIBUTES
+====================== */
+let dead = [];  // Array of {id, name}
+
+app.post("/death", (req, res) => {
+  if (!verify(req)) return res.sendStatus(403);
+  const { id, name } = req.body;
+  if (!id || !name) return res.sendStatus(400);
+  dead.push({ id, name });
+  res.sendStatus(200);
+});
+
+app.get("/dead", (_, res) => {
+  res.json(dead);
+});
+
+app.post("/reset-dead", (req, res) => {
+  if (!verify(req)) return res.sendStatus(403);
+  dead = [];
+  res.sendStatus(200);
+});
+
+/* ======================
    START
 ====================== */
 httpServer.listen(PORT, () => {
 	console.log(`🚀 HG Relay running on http://localhost:${PORT}`);
 	console.log(`📦 Serving static files from /public`);
 });
+
