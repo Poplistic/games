@@ -19,6 +19,7 @@ html,body{
 	top:16px;
 	left:16px;
 	z-index:10;
+	pointer-events:auto;
 }
 .ui{
 	min-width:180px;
@@ -36,7 +37,7 @@ html,body{
 	text-transform:uppercase;
 }
 .name{
-	margin-top:4px;
+	margin-top:6px;
 	padding:6px 8px;
 	border-radius:10px;
 	cursor:pointer;
@@ -107,6 +108,18 @@ function makePlayer(){
 		})
 	);
 
+	const camDir=new THREE.Mesh(
+		new THREE.ConeGeometry(18,70,32),
+		new THREE.MeshBasicMaterial({
+			color:0xffa0aa,
+			transparent:true,
+			opacity:.45,
+			depthWrite:false
+		})
+	);
+	camDir.rotation.x=Math.PI/2;
+	camDir.position.z=-40;
+
 	const vision=new THREE.Mesh(
 		new THREE.ConeGeometry(160,420,48,1,true),
 		new THREE.MeshBasicMaterial({
@@ -120,9 +133,9 @@ function makePlayer(){
 	vision.rotation.x=Math.PI/2;
 	vision.position.z=-210;
 
-	g.add(body);
-	g.add(vision);
-	g.userData.vision=vision;
+	g.add(body,camDir,vision);
+	g.userData={ camDir, vision };
+
 	return g;
 }
 
@@ -148,18 +161,22 @@ async function updatePlayers(){
 	ui.innerHTML="<b>Tributes</b>";
 
 	const alive=new Set();
+
 	for(const p of data){
 		alive.add(p.id);
+
 		if(!players.has(p.id)){
 			const m=makePlayer();
 			scene.add(m);
 			players.set(p.id,m);
 		}
+
 		const m=players.get(p.id);
 		addTrail(m.position.clone());
 
 		m.position.set(p.x,p.y,p.z);
 		m.rotation.y=p.yaw;
+		m.userData.camDir.rotation.z=p.pitch;
 		m.userData.vision.rotation.z=p.pitch;
 
 		const d=document.createElement("div");
@@ -168,6 +185,7 @@ async function updatePlayers(){
 		d.onclick=()=>follow=m;
 		ui.appendChild(d);
 	}
+
 	for(const [id,m] of players){
 		if(!alive.has(id)){
 			scene.remove(m);
@@ -179,9 +197,12 @@ setInterval(updatePlayers,200);
 
 /* ================= CAMERA CONTROL ================= */
 let follow=null;
-const cam={yaw:0,pitch:0};
+const cam={ yaw:0, pitch:0 };
 
-renderer.domElement.addEventListener("mousedown",()=>renderer.domElement.requestPointerLock());
+renderer.domElement.addEventListener("mousedown",()=>{
+	renderer.domElement.requestPointerLock();
+});
+
 addEventListener("mousemove",e=>{
 	if(document.pointerLockElement){
 		cam.yaw-=e.movementX*.002;
