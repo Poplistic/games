@@ -32,7 +32,7 @@ app.get("/players", (req, res) => {
 
 /* ================= KILL FEED ================= */
 
-// POST kill event from GDMC exporter
+// POST from GDMC exporter
 // { killer: "Steve", victim: "Alex" }
 app.post("/events", (req, res) => {
   events.push({
@@ -41,12 +41,12 @@ app.post("/events", (req, res) => {
     time: Date.now()
   });
 
-  // keep last 20 events
-  if (events.length > 20) events.shift();
+  // keep last 25 events
+  if (events.length > 25) events.shift();
+
   res.sendStatus(200);
 });
 
-// GET for web
 app.get("/events", (req, res) => {
   res.json(events);
 });
@@ -82,5 +82,5 @@ app.use(express.static("public"));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("HG map + kill feed running on", PORT);
+  console.log("Hunger Games map running on port", PORT);
 });
