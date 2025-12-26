@@ -1,47 +1,46 @@
 import express from "express";
 import cors from "cors";
-import path from "path";
-import { fileURLToPath } from "url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-let state = {
-  images: [],
-  announcement: {
-    text: "",
-    panels: [],
-    color: [255, 215, 0]
-  }
+const API_KEY = process.env.API_KEY || "CHANGE_ME";
+
+// Stored dome state
+let domeState = {
+  imageId: "0",
+  offsetX: 0,
+  offsetY: 0,
+  scale: 1,
+  rotation: 0
 };
 
-app.get("/dome", (req, res) => {
-  res.json(state);
-});
+// Website updates dome
+app.post("/update-dome", (req, res) => {
+  if (req.body.apiKey !== API_KEY) {
+    return res.status(403).json({ error: "Invalid API key" });
+  }
 
-app.post("/image", (req, res) => {
-  const image = req.body;
-  state.images = state.images.filter(i => i.id !== image.id);
-  state.images.push(image);
+  const { imageId, offsetX, offsetY, scale, rotation } = req.body;
+
+  domeState = {
+    imageId: String(imageId),
+    offsetX: Number(offsetX),
+    offsetY: Number(offsetY),
+    scale: Number(scale),
+    rotation: Number(rotation)
+  };
+
   res.json({ success: true });
 });
 
-app.post("/announcement", (req, res) => {
-  state.announcement = req.body;
-  res.json({ success: true });
-});
-
-app.use(express.static(__dirname));
-
-app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "index.html"));
+// Roblox polls dome state
+app.get("/dome-state", (req, res) => {
+  res.json(domeState);
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Capitol Dome running on port", PORT);
+  console.log("Dome controller running on port", PORT);
 });
