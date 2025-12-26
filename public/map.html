@@ -11,38 +11,40 @@ html, body {
     width: 100%;
     height: 100%;
     overflow: hidden;
-    background: #111;
+    background: #000;
     font-family: system-ui, Segoe UI, sans-serif;
 }
 
+/* ===== DARK BROADCAST UI ===== */
 #ui {
     position: fixed;
     top: 16px;
     left: 16px;
-    background: rgba(255,255,255,0.96);
+    background: rgba(10,12,16,0.85);
     border-radius: 14px;
     padding: 12px 14px;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.6);
     z-index: 10;
     min-width: 180px;
-    color: #111;
+    color: #f2f2f2;
 }
 
 .name {
     margin-top: 6px;
     padding: 6px 10px;
     border-radius: 10px;
-    background: rgba(0,0,0,0.05);
+    background: rgba(255,255,255,0.06);
     cursor: pointer;
+    transition: background 0.15s;
 }
 
 .name:hover {
-    background: rgba(0,0,0,0.1);
+    background: rgba(255,255,255,0.12);
 }
 
 .name.selected {
     background: linear-gradient(90deg, #ff4d5e, #ff9aa5);
-    color: white;
+    color: #111;
     font-weight: 600;
 }
 
@@ -71,51 +73,85 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.setPixelRatio(devicePixelRatio);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.0;
+renderer.toneMappingExposure = 1.05;
 document.body.appendChild(renderer.domElement);
 
 /* ================= SCENE ================= */
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xf2f2f2);
+
+/* ================= SKY (REALISTIC GRADIENT) ================= */
+const skyGeo = new THREE.SphereGeometry(12000, 32, 32);
+const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    uniforms: {
+        top:    { value: new THREE.Color(0x87b6e6) },
+        bottom: { value: new THREE.Color(0xf6e7c1) }
+    },
+    vertexShader: `
+        varying vec3 vPos;
+        void main(){
+            vPos = position;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+        }
+    `,
+    fragmentShader: `
+        varying vec3 vPos;
+        uniform vec3 top;
+        uniform vec3 bottom;
+        void main(){
+            float h = normalize(vPos).y * 0.5 + 0.5;
+            gl_FragColor = vec4(mix(bottom, top, h), 1.0);
+        }
+    `
+});
+scene.add(new THREE.Mesh(skyGeo, skyMat));
 
 /* ================= CAMERA ================= */
 const camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 20000);
 camera.position.set(0, 900, 1700);
 
 /* ================= LIGHTING ================= */
-scene.add(new THREE.AmbientLight(0xffffff, 0.9));
-const sun = new THREE.DirectionalLight(0xffffff, 0.8);
-sun.position.set(4000, 6000, 3000);
+scene.add(new THREE.AmbientLight(0xffffff, 0.75));
+
+const sun = new THREE.DirectionalLight(0xfff2d6, 1.0);
+sun.position.set(6000, 7000, 3000);
 scene.add(sun);
 
-/* ================= FLOOR ================= */
+/* ================= FLOOR (SANDY) ================= */
 const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(7000, 7000),
-    new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95 })
+    new THREE.MeshStandardMaterial({
+        color: 0xe8d3a2,
+        roughness: 0.95
+    })
 );
 floor.rotation.x = -Math.PI / 2;
 scene.add(floor);
 
-/* ================= GRID ================= */
-const grid = new THREE.GridHelper(7000, 70, 0xcccccc, 0xe0e0e0);
-grid.material.opacity = 0.6;
+/* ================= GRID (SUBTLE) ================= */
+const grid = new THREE.GridHelper(7000, 70, 0xcbb98b, 0xe6dab8);
 grid.material.transparent = true;
+grid.material.opacity = 0.35;
 scene.add(grid);
 
-/* ================= ARENA ================= */
+/* ================= ARENA (SAND + OUTLINE) ================= */
 const loader = new OBJLoader();
 loader.load("/arena.obj", obj => {
     obj.traverse(n => {
         if (n.isMesh) {
             n.material = new THREE.MeshStandardMaterial({
-                color: 0xffffff,
-                roughness: 0.85
+                color: 0xe6cfa0,
+                roughness: 0.9
             });
 
             const edges = new THREE.EdgesGeometry(n.geometry, 20);
             n.add(new THREE.LineSegments(
                 edges,
-                new THREE.LineBasicMaterial({ color: 0x222222, opacity: 0.8, transparent: true })
+                new THREE.LineBasicMaterial({
+                    color: 0x5a4a2f,
+                    transparent: true,
+                    opacity: 0.8
+                })
             ));
         }
     });
@@ -124,7 +160,7 @@ loader.load("/arena.obj", obj => {
     scene.add(obj);
 });
 
-/* ================= PLAYERS / HALOS / NAMEPLATES ================= */
+/* ================= PLAYERS / HALOS / LABELS ================= */
 const players = new Map();
 const halos = new Map();
 const labels = new Map();
@@ -157,7 +193,7 @@ function makeHalo(){
         map: haloTexture,
         transparent: true,
         depthWrite: false,
-        opacity: 0.3
+        opacity: 0.35
     });
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(240,240), mat);
     mesh.rotation.x = -Math.PI/2;
@@ -165,24 +201,27 @@ function makeHalo(){
     return mesh;
 }
 
-/* --- nameplate sprite --- */
+/* --- nameplate --- */
 function makeLabel(name){
     const c = document.createElement("canvas");
-    const g = c.getContext("2d");
     c.width = 256;
     c.height = 64;
+    const g = c.getContext("2d");
 
-    g.fillStyle = "white";
+    g.fillStyle = "rgba(0,0,0,0.75)";
     g.fillRect(0,0,256,64);
-    g.fillStyle = "#111";
+    g.fillStyle = "white";
     g.font = "bold 28px system-ui";
     g.textAlign = "center";
     g.textBaseline = "middle";
     g.fillText(name,128,34);
 
     const tex = new THREE.CanvasTexture(c);
-    const mat = new THREE.SpriteMaterial({ map: tex, depthTest:false });
-    const s = new THREE.Sprite(mat);
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: tex,
+        transparent: true,
+        depthTest: false
+    }));
     s.scale.set(200,50,1);
     scene.add(s);
     return s;
