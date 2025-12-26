@@ -9,10 +9,10 @@ app.use(express.json({ limit: "50mb" }));
 
 let players = {};   // id -> {id,x,y,z,alive}
 let chunks = {};    // "cx,cz" -> blocks[]
+let events = [];    // kill feed events
 
 /* ================= PLAYERS ================= */
 
-// POST from GDMC exporter
 app.post("/players", (req, res) => {
   for (const p of req.body) {
     players[p.id] = {
@@ -26,21 +26,39 @@ app.post("/players", (req, res) => {
   res.sendStatus(200);
 });
 
-// GET for web
 app.get("/players", (req, res) => {
   res.json(Object.values(players));
 });
 
+/* ================= KILL FEED ================= */
+
+// POST kill event from GDMC exporter
+// { killer: "Steve", victim: "Alex" }
+app.post("/events", (req, res) => {
+  events.push({
+    killer: req.body.killer,
+    victim: req.body.victim,
+    time: Date.now()
+  });
+
+  // keep last 20 events
+  if (events.length > 20) events.shift();
+  res.sendStatus(200);
+});
+
+// GET for web
+app.get("/events", (req, res) => {
+  res.json(events);
+});
+
 /* ================= CHUNKS ================= */
 
-// POST chunk data
 app.post("/chunks", (req, res) => {
   const { cx, cz, blocks } = req.body;
   chunks[`${cx},${cz}`] = blocks;
   res.sendStatus(200);
 });
 
-// GET nearby chunks
 app.get("/chunks", (req, res) => {
   const cx = Number(req.query.cx);
   const cz = Number(req.query.cz);
@@ -64,5 +82,5 @@ app.use(express.static("public"));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Hunger Games map running on port", PORT);
+  console.log("HG map + kill feed running on", PORT);
 });
