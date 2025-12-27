@@ -1,51 +1,219 @@
-<h1>Sky Editor</h1>
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Sky Editor 3D</title>
+<style>
+body { margin:0; overflow:hidden; background:#000; color:white; font-family:sans-serif; }
+#ui {
+  position:absolute; top:10px; left:10px;
+  background:rgba(0,0,0,0.75);
+  padding:10px; border-radius:8px; width:260px;
+}
+input, button { width:100%; margin-bottom:6px; }
+button { cursor:pointer; }
+.selected { outline:2px solid yellow; }
+</style>
+</head>
+<body>
 
-<div id="objects"></div>
-<button onclick="add()">Add Object</button>
-<button onclick="save()">Save</button>
+<div id="ui">
+  <h3>Sky Objects</h3>
+  <select id="list" size="4"></select>
+  <button onclick="addObject()">Add Object</button>
+  <hr>
+
+  Image ID
+  <input id="image">
+  <img id="preview" style="width:100%; display:none;">
+
+  Text
+  <input id="text">
+
+  Yaw <input id="yaw" type="range" min="-180" max="180">
+  Pitch <input id="pitch" type="range" min="-10" max="80">
+  Radius <input id="radius" type="range" min="400" max="1200">
+  Scale <input id="scale" type="range" min="0.5" max="3" step="0.1">
+
+  <button onclick="save()">Save</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/examples/js/controls/OrbitControls.js"></script>
 
 <script>
+const API = "https://games-k04d.onrender.com/sky";
+const token = localStorage.getItem("token");
+
+let scene = new THREE.Scene();
+let camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 5000);
+camera.position.set(0,200,600);
+
+let renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+let controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+scene.add(new THREE.AmbientLight(0xffffff,1));
+
+/* Sky dome */
+scene.add(new THREE.Mesh(
+  new THREE.SphereGeometry(1500,32,32),
+  new THREE.MeshBasicMaterial({color:0x111133, side:THREE.BackSide})
+));
+
+/* State */
 let objects = [];
+let selected = null;
 
-function add() {
-  objects.push({
-    id: "object_" + Date.now(),
-    imageId: "",
-    text: "",
-    yaw: 0,
-    pitch: 20,
-    radius: 800,
-    scale: 1
-  });
-  render();
+/* Helpers */
+function spherical(yaw,pitch,radius){
+  yaw = THREE.MathUtils.degToRad(yaw);
+  pitch = THREE.MathUtils.degToRad(pitch);
+  return new THREE.Vector3(
+    Math.cos(pitch)*Math.cos(yaw)*radius,
+    Math.sin(pitch)*radius,
+    Math.cos(pitch)*Math.sin(yaw)*radius
+  );
 }
 
-function render() {
-  objectsDiv.innerHTML = "";
-  objects.forEach((o, i) => {
-    objectsDiv.innerHTML += `
-      <fieldset>
-        <legend>${o.id}</legend>
-        Image ID <input onchange="o.imageId=this.value"><br>
-        Text <input onchange="o.text=this.value"><br>
-        Yaw <input type="number" value="${o.yaw}" onchange="o.yaw=+this.value"><br>
-        Pitch <input type="number" value="${o.pitch}" onchange="o.pitch=+this.value"><br>
-        Radius <input type="number" value="${o.radius}" onchange="o.radius=+this.value"><br>
-        Scale <input type="number" step="0.1" value="${o.scale}" onchange="o.scale=+this.value"><br>
-      </fieldset>
-    `;
+function robloxThumb(id){
+  return `https://www.roblox.com/asset-thumbnail/image?assetId=${id.replace(/\D/g,"")}&width=420&height=420&format=png`;
+}
+
+/* Add object */
+function addObject(){
+  let id = "obj_" + Date.now();
+  let data = { id, imageId:"", text:"", yaw:0, pitch:25, radius:800, scale:1 };
+
+  let plane = new THREE.Mesh(
+    new THREE.PlaneGeometry(200,100),
+    new THREE.MeshBasicMaterial({color:0xffffff, transparent:true})
+  );
+  scene.add(plane);
+
+  objects.push({ data, mesh:plane });
+  updateList();
+  select(id);
+}
+
+/* Selection */
+function updateList(){
+  list.innerHTML = "";
+  objects.forEach(o=>{
+    let opt = document.createElement("option");
+    opt.value = o.data.id;
+    opt.textContent = o.data.id;
+    list.appendChild(opt);
   });
 }
 
-async function save() {
-  await fetch("https://games-k04d.onrender.com/sky", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": localStorage.getItem("token")
+function select(id){
+  selected = objects.find(o=>o.data.id===id);
+  list.value = id;
+  syncUI();
+}
+
+/* UI sync */
+function syncUI(){
+  if(!selected) return;
+  let d = selected.data;
+
+  image.value = d.imageId;
+  text.value = d.text;
+  yaw.value = d.yaw;
+  pitch.value = d.pitch;
+  radius.value = d.radius;
+  scale.value = d.scale;
+
+  if(d.imageId){
+    preview.src = robloxThumb(d.imageId);
+    preview.style.display = "block";
+  }
+
+  updateMesh();
+}
+
+function updateMesh(){
+  let d = selected.data;
+  let pos = spherical(d.yaw,d.pitch,d.radius);
+  selected.mesh.position.copy(pos);
+  selected.mesh.lookAt(0,pos.y,0);
+  selected.mesh.scale.setScalar(d.scale);
+}
+
+/* UI events */
+[list,image,text,yaw,pitch,radius,scale].forEach(el=>{
+  el.oninput = ()=>{
+    if(!selected) return;
+    let d = selected.data;
+    d.imageId = image.value;
+    d.text = text.value;
+    d.yaw = +yaw.value;
+    d.pitch = +pitch.value;
+    d.radius = +radius.value;
+    d.scale = +scale.value;
+
+    if(image.value){
+      preview.src = robloxThumb(image.value);
+      preview.style.display = "block";
+      selected.mesh.material.map = new THREE.TextureLoader().load(preview.src);
+      selected.mesh.material.needsUpdate = true;
+    }
+
+    updateMesh();
+  };
+});
+
+list.onchange = ()=> select(list.value);
+
+/* Mouse drag */
+let raycaster = new THREE.Raycaster();
+let mouse = new THREE.Vector2();
+let dragging = false;
+
+renderer.domElement.onmousedown = e=>{
+  mouse.x = (e.clientX/innerWidth)*2-1;
+  mouse.y = -(e.clientY/innerHeight)*2+1;
+  raycaster.setFromCamera(mouse,camera);
+  let hits = raycaster.intersectObjects(objects.map(o=>o.mesh));
+  if(hits.length){
+    dragging = true;
+    select(objects.find(o=>o.mesh===hits[0].object).data.id);
+  }
+};
+
+renderer.domElement.onmouseup = ()=> dragging=false;
+
+renderer.domElement.onmousemove = e=>{
+  if(!dragging || !selected) return;
+  selected.data.yaw += e.movementX * 0.2;
+  selected.data.pitch -= e.movementY * 0.2;
+  syncUI();
+};
+
+/* Save */
+async function save(){
+  await fetch(API,{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "Authorization":token
     },
-    body: JSON.stringify(objects)
+    body:JSON.stringify(objects.map(o=>o.data))
   });
   alert("Saved");
 }
+
+/* Render */
+function animate(){
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene,camera);
+}
+animate();
 </script>
+</body>
+</html>
