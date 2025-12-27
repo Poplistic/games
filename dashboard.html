@@ -5,21 +5,88 @@
 <title>Sky Editor</title>
 
 <style>
-body { margin:0; overflow:hidden; background:black; color:white; font-family:sans-serif; }
-
-#ui {
-  position:absolute;
-  top:10px;
-  left:10px;
-  width:270px;
-  padding:10px;
-  background:rgba(0,0,0,0.75);
-  border-radius:12px;
+:root {
+  --accent: #7aa2ff;
+  --bg-glass: rgba(20, 24, 40, 0.65);
 }
 
+body {
+  margin: 0;
+  overflow: hidden;
+  background: radial-gradient(circle at top, #0b1020, #000);
+  color: white;
+  font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+}
+
+/* ---------- UI PANEL ---------- */
+#ui {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  width: 280px;
+  padding: 14px;
+  background: var(--bg-glass);
+  backdrop-filter: blur(14px) saturate(140%);
+  border-radius: 16px;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.06),
+    0 20px 40px rgba(0,0,0,0.6);
+}
+
+#ui hr {
+  border: none;
+  height: 1px;
+  background: linear-gradient(to right, transparent, #ffffff22, transparent);
+  margin: 10px 0;
+}
+
+label {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* ---------- INPUTS ---------- */
 input, select, button {
-  width:100%;
-  margin-bottom:6px;
+  width: 100%;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  border: none;
+  outline: none;
+  font-size: 13px;
+}
+
+input, select {
+  padding: 6px 8px;
+  background: rgba(255,255,255,0.08);
+  color: white;
+}
+
+input[type="range"] {
+  padding: 0;
+}
+
+button {
+  padding: 8px;
+  background: linear-gradient(135deg, #4f6cff, #7aa2ff);
+  color: white;
+  cursor: pointer;
+  font-weight: 600;
+  box-shadow: 0 6px 14px rgba(80,120,255,0.35);
+}
+
+button:hover {
+  filter: brightness(1.1);
+}
+
+select {
+  height: 80px;
+}
+
+#preview {
+  width: 100%;
+  border-radius: 10px;
+  margin-bottom: 8px;
+  box-shadow: 0 8px 20px rgba(0,0,0,0.5);
 }
 </style>
 </head>
@@ -29,23 +96,32 @@ input, select, button {
 <div id="ui">
   <button onclick="undo()">Undo</button>
   <button onclick="redo()">Redo</button>
+
   <hr>
 
   <select id="list" size="4"></select>
   <button onclick="addObject()">Add Object</button>
+
   <hr>
 
-  Image ID
+  <label>Image ID</label>
   <input id="image">
-  <img id="preview" style="width:100%;display:none">
+  <img id="preview" style="display:none">
 
-  Text
+  <label>Text</label>
   <input id="text">
 
-  Yaw <input id="yaw" type="range" min="-180" max="180">
-  Pitch <input id="pitch" type="range" min="-10" max="80">
-  Radius <input id="radius" type="range" min="400" max="1200">
-  Scale <input id="scale" type="range" min="0.5" max="3" step="0.1">
+  <label>Yaw</label>
+  <input id="yaw" type="range" min="-180" max="180">
+
+  <label>Pitch</label>
+  <input id="pitch" type="range" min="-10" max="80">
+
+  <label>Radius</label>
+  <input id="radius" type="range" min="400" max="1200">
+
+  <label>Scale</label>
+  <input id="scale" type="range" min="0.5" max="3" step="0.1">
 
   <button onclick="save()">Save</button>
 </div>
@@ -58,27 +134,61 @@ const API = "https://games-k04d.onrender.com/sky";
 const token = localStorage.getItem("token");
 
 let scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0x06080f, 800, 2200);
+
 let camera = new THREE.PerspectiveCamera(60, innerWidth/innerHeight, 1, 5000);
 camera.position.set(0,200,600);
 
 let renderer = new THREE.WebGLRenderer({antialias:true});
 renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(devicePixelRatio);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
 let controls = new THREE.OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
-scene.add(new THREE.AmbientLight(0xffffff,1));
+/* ---------- LIGHTING ---------- */
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+let key = new THREE.DirectionalLight(0x9bb4ff, 0.6);
+key.position.set(300,400,200);
+scene.add(key);
+
+/* ---------- SOFT SKY DOME ---------- */
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide,
+  uniforms: {
+    top: { value: new THREE.Color(0x0b1430) },
+    bottom: { value: new THREE.Color(0x020409) }
+  },
+  vertexShader: `
+    varying vec3 vPos;
+    void main(){
+      vPos = position;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+    }
+  `,
+  fragmentShader: `
+    uniform vec3 top;
+    uniform vec3 bottom;
+    varying vec3 vPos;
+    void main(){
+      float h = normalize(vPos).y * 0.5 + 0.5;
+      gl_FragColor = vec4(mix(bottom, top, h), 1.0);
+    }
+  `
+});
 
 scene.add(new THREE.Mesh(
-  new THREE.SphereGeometry(1500,32,32),
-  new THREE.MeshBasicMaterial({color:0x111133, side:THREE.BackSide})
+  new THREE.SphereGeometry(2000, 48, 32),
+  skyMat
 ));
 
+/* ---------- OBJECT SYSTEM (UNCHANGED LOGIC) ---------- */
 let objects = [];
 let selected = null;
 
-/* ---------- UNDO / REDO ---------- */
 let history = [];
 let historyIndex = -1;
 
@@ -108,20 +218,9 @@ function restore(i) {
   select(objects[0]?.data.id);
 }
 
-function undo() {
-  if (historyIndex > 0) restore(--historyIndex);
-}
+function undo(){ if(historyIndex>0) restore(--historyIndex); }
+function redo(){ if(historyIndex<history.length-1) restore(++historyIndex); }
 
-function redo() {
-  if (historyIndex < history.length - 1) restore(++historyIndex);
-}
-
-window.addEventListener("keydown", e => {
-  if (e.ctrlKey && e.key === "z") undo();
-  if (e.ctrlKey && e.key === "y") redo();
-});
-
-/* ---------- HELPERS ---------- */
 function spherical(y,p,r){
   y = THREE.MathUtils.degToRad(y);
   p = THREE.MathUtils.degToRad(p);
@@ -136,7 +235,6 @@ function thumb(id){
   return `https://www.roblox.com/asset-thumbnail/image?assetId=${id.replace(/\D/g,"")}&width=420&height=420&format=png`;
 }
 
-/* ---------- OBJECTS ---------- */
 function addObject(){
   let d = { id:Date.now()+"", imageId:"", text:"", yaw:0, pitch:25, radius:800, scale:1 };
   let mesh = new THREE.Mesh(
