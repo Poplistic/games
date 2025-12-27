@@ -1,8 +1,42 @@
-<h1>Sky Object Controller</h1>
-<textarea id="json" rows="20" cols="80"></textarea><br>
+<h1>Sky Editor</h1>
+
+<div id="objects"></div>
+<button onclick="add()">Add Object</button>
 <button onclick="save()">Save</button>
 
 <script>
+let objects = [];
+
+function add() {
+  objects.push({
+    id: "object_" + Date.now(),
+    imageId: "",
+    text: "",
+    yaw: 0,
+    pitch: 20,
+    radius: 800,
+    scale: 1
+  });
+  render();
+}
+
+function render() {
+  objectsDiv.innerHTML = "";
+  objects.forEach((o, i) => {
+    objectsDiv.innerHTML += `
+      <fieldset>
+        <legend>${o.id}</legend>
+        Image ID <input onchange="o.imageId=this.value"><br>
+        Text <input onchange="o.text=this.value"><br>
+        Yaw <input type="number" value="${o.yaw}" onchange="o.yaw=+this.value"><br>
+        Pitch <input type="number" value="${o.pitch}" onchange="o.pitch=+this.value"><br>
+        Radius <input type="number" value="${o.radius}" onchange="o.radius=+this.value"><br>
+        Scale <input type="number" step="0.1" value="${o.scale}" onchange="o.scale=+this.value"><br>
+      </fieldset>
+    `;
+  });
+}
+
 async function save() {
   await fetch("https://games-k04d.onrender.com/sky", {
     method: "POST",
@@ -10,8 +44,8 @@ async function save() {
       "Content-Type": "application/json",
       "Authorization": localStorage.getItem("token")
     },
-    body: json.value
+    body: JSON.stringify(objects)
   });
-  alert("Updated");
+  alert("Saved");
 }
 </script>
